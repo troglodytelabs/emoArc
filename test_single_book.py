@@ -100,19 +100,33 @@ def strip_gutenberg_boilerplate(text):
 
 def detect_chapters(text, verbose=False):
     """
-    Detect chapters using multiple regex patterns.
+    Improved chapter detection with support for chapter titles.
+
+    Handles formats like:
+    - "CHAPTER 1. Loomings."
+    - "CHAPTER I"
+    - "Chapter 1: The Beginning"
 
     Returns:
         List of (chapter_title, chapter_text, start_pos) tuples
     """
-    # Multiple chapter patterns to try
+    # Enhanced patterns (order matters - more specific first)
     patterns = [
-        r'^CHAPTER [IVXLCDM]+\.?\s*$',  # CHAPTER I, CHAPTER XII, etc.
-        r'^CHAPTER \d+\.?\s*$',  # CHAPTER 1, CHAPTER 23, etc.
-        r'^Chapter [IVXLCDM]+\.?\s*$',  # Chapter I, Chapter XII, etc.
-        r'^Chapter \d+\.?\s*$',  # Chapter 1, Chapter 23, etc.
-        r'^[IVXLCDM]+\.?\s*$',  # Just roman numerals
-        r'^\d+\.?\s*$',  # Just numbers
+        # With titles after number/numeral
+        r'^CHAPTER\s+[IVXLCDM]+[\.:)]?\s+.+$',  # CHAPTER I. Title
+        r'^CHAPTER\s+\d+[\.:)]?\s+.+$',  # CHAPTER 1. Title
+        r'^Chapter\s+[IVXLCDM]+[\.:)]?\s+.+$',  # Chapter I. Title
+        r'^Chapter\s+\d+[\.:)]?\s+.+$',  # Chapter 1. Title
+
+        # Without titles
+        r'^CHAPTER\s+[IVXLCDM]+\.?\s*$',  # CHAPTER I
+        r'^CHAPTER\s+\d+\.?\s*$',  # CHAPTER 1
+        r'^Chapter\s+[IVXLCDM]+\.?\s*$',  # Chapter I
+        r'^Chapter\s+\d+\.?\s*$',  # Chapter 1
+
+        # Just numerals/numbers (risky, only if nothing else works)
+        r'^[IVXLCDM]+\.?\s*$',  # Roman only
+        r'^\d+\.?\s*$',  # Arabic only
     ]
 
     lines = text.split('\n')
@@ -130,10 +144,11 @@ def detect_chapters(text, verbose=False):
                 matches.append((line, char_pos, i))
 
         # Use this pattern if we found a reasonable number of chapters
-        if 3 <= len(matches) <= 200:
+        if 3 <= len(matches) <= 300:  # Expanded upper limit
             if verbose:
                 print(f"  Using pattern: {pattern}")
                 print(f"  Found {len(matches)} chapters")
+                print(f"  Sample: {[m[0] for m in matches[:3]]}")
 
             # Extract chapter texts
             for i, (title, pos, line_num) in enumerate(matches):
