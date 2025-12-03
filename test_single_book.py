@@ -100,40 +100,51 @@ def strip_gutenberg_boilerplate(text):
 
 def detect_chapters(text, verbose=False):
     """
-    Improved chapter detection with support for chapter titles.
+    Improved chapter detection with support for chapters, acts, and scenes.
 
     Handles formats like:
-    - "CHAPTER 1. Loomings."
-    - "CHAPTER I"
-    - "Chapter 1: The Beginning"
+    - Books: "CHAPTER 1. Loomings.", "CHAPTER I", "Chapter 1: The Beginning"
+    - Plays: "ACT I", "Scene I. A public place.", "THE PROLOGUE"
 
     Returns:
         List of (chapter_title, chapter_text, start_pos) tuples
     """
     # Enhanced patterns (order matters - more specific first)
     patterns = [
-        # With titles after number/numeral
-        r'^CHAPTER\s+[IVXLCDM]+[\.:)]?\s+.+$',  # CHAPTER I. Title
-        r'^CHAPTER\s+\d+[\.:)]?\s+.+$',  # CHAPTER 1. Title
-        r'^Chapter\s+[IVXLCDM]+[\.:)]?\s+.+$',  # Chapter I. Title
-        r'^Chapter\s+\d+[\.:)]?\s+.+$',  # Chapter 1. Title
+        # Plays - Acts and Scenes
+        (r'^ACT\s+[IVXLCDM]+\.?\s*$', 'Play Acts'),
+        (r'^Act\s+[IVXLCDM]+\.?\s*$', 'Play Acts (lowercase)'),
+        (r'^Scene\s+[IVXLCDM]+\.?\s+.+$', 'Play Scenes with description'),
+        (r'^Scene\s+[IVXLCDM]+\.?\s*$', 'Play Scenes'),
+        (r'^SCENE\s+[IVXLCDM]+\.?\s+.+$', 'Play SCENES with description'),
+        (r'^SCENE\s+[IVXLCDM]+\.?\s*$', 'Play SCENES'),
 
-        # Without titles
-        r'^CHAPTER\s+[IVXLCDM]+\.?\s*$',  # CHAPTER I
-        r'^CHAPTER\s+\d+\.?\s*$',  # CHAPTER 1
-        r'^Chapter\s+[IVXLCDM]+\.?\s*$',  # Chapter I
-        r'^Chapter\s+\d+\.?\s*$',  # Chapter 1
+        # Prologues and Epilogues
+        (r'^(THE\s+)?PROLOGUE\.?\s*$', 'Prologue'),
+        (r'^(THE\s+)?EPILOGUE\.?\s*$', 'Epilogue'),
+
+        # Books - Chapters with titles
+        (r'^CHAPTER\s+[IVXLCDM]+[\.:)]?\s+.+$', 'CHAPTER + Roman + Title'),
+        (r'^CHAPTER\s+\d+[\.:)]?\s+.+$', 'CHAPTER + Arabic + Title'),
+        (r'^Chapter\s+[IVXLCDM]+[\.:)]?\s+.+$', 'Chapter + Roman + Title'),
+        (r'^Chapter\s+\d+[\.:)]?\s+.+$', 'Chapter + Arabic + Title'),
+
+        # Books - Chapters without titles
+        (r'^CHAPTER\s+[IVXLCDM]+\.?\s*$', 'CHAPTER + Roman'),
+        (r'^CHAPTER\s+\d+\.?\s*$', 'CHAPTER + Arabic'),
+        (r'^Chapter\s+[IVXLCDM]+\.?\s*$', 'Chapter + Roman'),
+        (r'^Chapter\s+\d+\.?\s*$', 'Chapter + Arabic'),
 
         # Just numerals/numbers (risky, only if nothing else works)
-        r'^[IVXLCDM]+\.?\s*$',  # Roman only
-        r'^\d+\.?\s*$',  # Arabic only
+        (r'^[IVXLCDM]+\.?\s*$', 'Roman only'),
+        (r'^\d+\.?\s*$', 'Arabic only'),
     ]
 
     lines = text.split('\n')
     chapters = []
 
     # Try each pattern
-    for pattern in patterns:
+    for pattern, pattern_name in patterns:
         matches = []
 
         for i, line in enumerate(lines):
@@ -146,9 +157,10 @@ def detect_chapters(text, verbose=False):
         # Use this pattern if we found a reasonable number of chapters
         if 3 <= len(matches) <= 300:  # Expanded upper limit
             if verbose:
-                print(f"  Using pattern: {pattern}")
-                print(f"  Found {len(matches)} chapters")
-                print(f"  Sample: {[m[0] for m in matches[:3]]}")
+                print(f"  Using pattern: {pattern_name}")
+                print(f"  Regex: {pattern}")
+                print(f"  Found {len(matches)} segments")
+                print(f"  Sample: {[m[0] for m in matches[:5]]}")
 
             # Extract chapter texts
             for i, (title, pos, line_num) in enumerate(matches):
@@ -164,7 +176,15 @@ def detect_chapters(text, verbose=False):
             return chapters
 
     if verbose:
-        print("  No reliable chapter pattern found")
+        print("  No reliable pattern found")
+        print("  Showing lines with 'act', 'scene', or 'chapter':")
+        for i, line in enumerate(lines[:1000]):
+            line_lower = line.strip().lower()
+            if any(word in line_lower for word in ['act', 'scene', 'chapter', 'prologue']):
+                print(f"    Line {i}: {line.strip()[:80]}")
+                if i > 20:  # Limit output
+                    print("    ... (showing first 20 matches)")
+                    break
 
     return []
 
