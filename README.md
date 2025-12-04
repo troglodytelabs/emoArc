@@ -45,14 +45,23 @@ python analyze_gutenberg_sample.py
 - Enables overlaying multiple books' emotional arcs on the same chart
 - Allows comparison of "beginning", "middle", "end" patterns across different stories
 
-**Output:**
-- `gutenberg_sample_analysis.json` - Full results for all books
-- `emotion_distributions.png` - Distribution of emotions across all books
-- `average_emotional_arc.png` - Average emotional progression from beginning to end across all 100 books
-- `comparative_joy_arcs.png` - 20 joyful books' arcs overlaid on normalized timeline
-- `comparative_sadness_arcs.png` - 20 sad books' arcs overlaid on normalized timeline
-- `top_joyful_books.png` - Top 10 books by joy score
-- `top_sad_books.png` - Top 10 books by sadness score
+**Output Structure:**
+```
+outputs/
+├── data/
+│   └── gutenberg_sample_analysis.json - Full analysis results
+└── visualizations/
+    ├── individual_emotional_arcs.png ⭐ MAIN INFOGRAPHIC (12 books grid)
+    ├── emotion_distributions.png - Statistical distributions
+    ├── average_emotional_arc.png - Average progression patterns
+    ├── comparative_joy_arcs.png - 20 joyful books overlaid
+    ├── comparative_sadness_arcs.png - 20 sad books overlaid
+    ├── top_joyful_books.png - Top 10 ranking
+    └── top_sad_books.png - Top 10 ranking
+```
+
+**Main Infographic:**
+The `individual_emotional_arcs.png` shows a 3x4 grid of 12 diverse books, each displaying all 8 emotions over time (similar to Romeo & Juliet style). This provides an at-a-glance view of how different narratives use emotional patterns.
 
 ## Setup
 

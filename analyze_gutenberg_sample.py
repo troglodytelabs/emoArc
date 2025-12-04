@@ -340,6 +340,10 @@ def save_results(results: List[Dict], output_file: str = 'gutenberg_analysis_res
     """Save analysis results to JSON"""
     print(f"Saving results to {output_file}...")
 
+    # Ensure directory exists
+    output_path = Path(output_file)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
     with open(output_file, 'w') as f:
         json.dump(results, f, indent=2)
 
@@ -349,6 +353,10 @@ def save_results(results: List[Dict], output_file: str = 'gutenberg_analysis_res
 def plot_emotion_distributions(results: List[Dict], output_file: str = 'emotion_distributions.png'):
     """Plot emotion distributions across all analyzed books"""
     print(f"\nGenerating emotion distribution visualization...")
+
+    # Ensure directory exists
+    output_path = Path(output_file)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Collect average emotions for each book
     all_emotions = {emotion: [] for emotion in EMOTION_LABELS}
@@ -399,6 +407,10 @@ def plot_comparative_arcs(results: List[Dict], emotion: str = 'joy',
     """
     print(f"\nGenerating comparative emotional arcs for {emotion}...")
 
+    # Ensure directory exists
+    output_path = Path(output_file)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
     # Sort by average emotion and take top N
     sorted_results = sorted(results,
                           key=lambda x: x['avg_emotions'][emotion],
@@ -445,6 +457,10 @@ def plot_average_emotional_arc(results: List[Dict], output_file: str = 'average_
     Shows the typical emotion progression from beginning to end.
     """
     print(f"\nGenerating average emotional arc across all books...")
+
+    # Ensure directory exists
+    output_path = Path(output_file)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Determine number of segments (should be consistent, but check)
     num_segments = results[0]['num_segments']
@@ -499,6 +515,10 @@ def plot_top_books(results: List[Dict], emotion: str = 'joy',
     """Plot books with highest scores for a specific emotion"""
     print(f"\nGenerating top {top_n} books by {emotion}...")
 
+    # Ensure directory exists
+    output_path = Path(output_file)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
     # Sort books by the specified emotion
     sorted_results = sorted(results,
                           key=lambda x: x['avg_emotions'][emotion],
@@ -524,6 +544,96 @@ def plot_top_books(results: List[Dict], emotion: str = 'joy',
     plt.tight_layout()
     plt.savefig(output_file, dpi=300, bbox_inches='tight')
     print(f"Visualization saved to {output_file}")
+
+
+def plot_individual_book_arcs(results: List[Dict], num_books: int = 12,
+                             output_file: str = 'individual_emotional_arcs.png'):
+    """
+    Create comprehensive infographic showing emotional arcs for multiple books.
+    Each subplot shows all 8 emotions over time for one book (similar to Romeo & Juliet style).
+    """
+    print(f"\nGenerating comprehensive infographic for {num_books} books...")
+
+    # Ensure directory exists
+    output_path = Path(output_file)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Select diverse books by different emotions
+    selected_books = []
+
+    # Get top books for different emotions to show variety
+    emotions_to_sample = ['joy', 'sadness', 'fear', 'anger']
+    books_per_emotion = num_books // len(emotions_to_sample)
+
+    added_titles = set()
+    for emotion in emotions_to_sample:
+        sorted_by_emotion = sorted(results,
+                                  key=lambda x: x['avg_emotions'][emotion],
+                                  reverse=True)
+        for book in sorted_by_emotion:
+            if book['title'] not in added_titles and len(selected_books) < num_books:
+                selected_books.append(book)
+                added_titles.add(book['title'])
+                if len(selected_books) % books_per_emotion == 0:
+                    break
+
+    # Fill remaining slots if needed
+    while len(selected_books) < num_books:
+        for book in results:
+            if book['title'] not in added_titles:
+                selected_books.append(book)
+                added_titles.add(book['title'])
+                break
+
+    # Create grid layout
+    cols = 3
+    rows = (num_books + cols - 1) // cols
+    fig, axes = plt.subplots(rows, cols, figsize=(20, 5 * rows))
+    fig.suptitle('Emotional Arcs Across Classic Literature', fontsize=18, fontweight='bold', y=0.995)
+
+    # Flatten axes for easier iteration
+    if rows == 1:
+        axes = axes.reshape(1, -1)
+    axes_flat = axes.flatten()
+
+    # Color scheme for emotions
+    emotion_colors = plt.cm.tab10(range(len(EMOTION_LABELS)))
+
+    for idx, (book, ax) in enumerate(zip(selected_books, axes_flat)):
+        segment_emotions = book['segment_emotions']
+        num_segments = len(segment_emotions)
+        x_values = np.linspace(0, 100, num_segments)
+
+        # Plot each emotion
+        for emotion_idx, emotion in enumerate(EMOTION_LABELS):
+            emotion_progression = [seg[emotion] for seg in segment_emotions]
+            ax.plot(x_values, emotion_progression,
+                   label=emotion.capitalize(),
+                   linewidth=2,
+                   marker='o',
+                   markersize=4,
+                   color=emotion_colors[emotion_idx],
+                   alpha=0.8)
+
+        # Format subplot
+        title = book['title']
+        if len(title) > 45:
+            title = title[:45] + '...'
+        ax.set_title(title, fontsize=10, fontweight='bold', pad=10)
+        ax.set_xlabel('Progress (%)', fontsize=9)
+        ax.set_ylabel('Emotion Score', fontsize=9)
+        ax.set_xlim(0, 100)
+        ax.set_ylim(0, max(0.5, max([max([seg[e] for e in EMOTION_LABELS]) for seg in segment_emotions]) * 1.1))
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc='upper right', fontsize=7, ncol=2)
+
+    # Hide unused subplots
+    for idx in range(len(selected_books), len(axes_flat)):
+        axes_flat[idx].set_visible(False)
+
+    plt.tight_layout()
+    plt.savefig(output_file, dpi=300, bbox_inches='tight')
+    print(f"Infographic saved to {output_file}")
 
 
 def print_summary(results: List[Dict]):
@@ -566,10 +676,16 @@ def main():
     NUM_BOOKS = 100
     DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
+    # Output directories
+    OUTPUT_DIR = Path("outputs")
+    DATA_DIR = OUTPUT_DIR / "data"
+    VIZ_DIR = OUTPUT_DIR / "visualizations"
+
     print(f"\nConfiguration:")
     print(f"  Model: {MODEL_PATH}")
     print(f"  Books to analyze: {NUM_BOOKS}")
     print(f"  Device: {DEVICE}")
+    print(f"  Output directory: {OUTPUT_DIR}")
 
     # Step 1: Load model
     model, tokenizer = load_model(MODEL_PATH, DEVICE)
@@ -582,15 +698,34 @@ def main():
         return
 
     # Step 3: Save results
-    save_results(results, 'gutenberg_sample_analysis.json')
+    save_results(results, str(DATA_DIR / 'gutenberg_sample_analysis.json'))
 
     # Step 4: Generate visualizations
-    plot_emotion_distributions(results, 'emotion_distributions.png')
-    plot_average_emotional_arc(results, 'average_emotional_arc.png')
-    plot_comparative_arcs(results, emotion='joy', num_books=20, output_file='comparative_joy_arcs.png')
-    plot_comparative_arcs(results, emotion='sadness', num_books=20, output_file='comparative_sadness_arcs.png')
-    plot_top_books(results, emotion='joy', top_n=10, output_file='top_joyful_books.png')
-    plot_top_books(results, emotion='sadness', top_n=10, output_file='top_sad_books.png')
+    print("\n" + "="*80)
+    print("Generating visualizations...")
+    print("="*80)
+
+    # Main infographic showing individual book arcs (NEW!)
+    plot_individual_book_arcs(results, num_books=12,
+                             output_file=str(VIZ_DIR / 'individual_emotional_arcs.png'))
+
+    # Statistical distributions
+    plot_emotion_distributions(results, str(VIZ_DIR / 'emotion_distributions.png'))
+
+    # Average patterns
+    plot_average_emotional_arc(results, str(VIZ_DIR / 'average_emotional_arc.png'))
+
+    # Comparative arcs
+    plot_comparative_arcs(results, emotion='joy', num_books=20,
+                         output_file=str(VIZ_DIR / 'comparative_joy_arcs.png'))
+    plot_comparative_arcs(results, emotion='sadness', num_books=20,
+                         output_file=str(VIZ_DIR / 'comparative_sadness_arcs.png'))
+
+    # Top books rankings
+    plot_top_books(results, emotion='joy', top_n=10,
+                  output_file=str(VIZ_DIR / 'top_joyful_books.png'))
+    plot_top_books(results, emotion='sadness', top_n=10,
+                  output_file=str(VIZ_DIR / 'top_sad_books.png'))
 
     # Step 5: Print summary
     print_summary(results)
@@ -599,13 +734,16 @@ def main():
     print("Analysis complete!")
     print("="*80)
     print("\nGenerated files:")
-    print("  - gutenberg_sample_analysis.json (raw data)")
-    print("  - emotion_distributions.png (distribution stats)")
-    print("  - average_emotional_arc.png (average arc across all books)")
-    print("  - comparative_joy_arcs.png (20 books overlaid)")
-    print("  - comparative_sadness_arcs.png (20 books overlaid)")
-    print("  - top_joyful_books.png (top 10 by joy)")
-    print("  - top_sad_books.png (top 10 by sadness)")
+    print("\nData:")
+    print(f"  - {DATA_DIR / 'gutenberg_sample_analysis.json'}")
+    print("\nVisualizations:")
+    print(f"  - {VIZ_DIR / 'individual_emotional_arcs.png'} ⭐ MAIN INFOGRAPHIC")
+    print(f"  - {VIZ_DIR / 'emotion_distributions.png'}")
+    print(f"  - {VIZ_DIR / 'average_emotional_arc.png'}")
+    print(f"  - {VIZ_DIR / 'comparative_joy_arcs.png'}")
+    print(f"  - {VIZ_DIR / 'comparative_sadness_arcs.png'}")
+    print(f"  - {VIZ_DIR / 'top_joyful_books.png'}")
+    print(f"  - {VIZ_DIR / 'top_sad_books.png'}")
 
 
 if __name__ == "__main__":
