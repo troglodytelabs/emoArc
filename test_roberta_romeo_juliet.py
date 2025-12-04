@@ -70,8 +70,8 @@ def fetch_romeo_and_juliet() -> str:
     """Fetch Romeo and Juliet text from HuggingFace Project Gutenberg dataset"""
     print("Fetching Romeo and Juliet from HuggingFace Project Gutenberg dataset...")
 
-    # Load the Project Gutenberg dataset
-    dataset = load_dataset("manu/project_gutenberg", "en", split="train", streaming=True)
+    # Load the Project Gutenberg dataset (using 'default' config)
+    dataset = load_dataset("manu/project_gutenberg", split="train", streaming=True)
 
     # Romeo and Juliet metadata
     # Search for Romeo and Juliet by title or ID (1513)
