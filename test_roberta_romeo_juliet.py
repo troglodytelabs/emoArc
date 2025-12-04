@@ -7,7 +7,7 @@ Creates an emotional story arc by analyzing text chapter by chapter
 import torch
 import torch.nn as nn
 from transformers import RobertaTokenizer, RobertaModel
-import requests
+from datasets import load_dataset
 import re
 import matplotlib.pyplot as plt
 import numpy as np
@@ -67,16 +67,59 @@ def load_model(model_path: str, device: str = 'cpu') -> Tuple[nn.Module, Roberta
 
 
 def fetch_romeo_and_juliet() -> str:
-    """Fetch Romeo and Juliet text from Project Gutenberg"""
-    print("Fetching Romeo and Juliet from Project Gutenberg...")
+    """Fetch Romeo and Juliet text from HuggingFace Project Gutenberg dataset"""
+    print("Fetching Romeo and Juliet from HuggingFace Project Gutenberg dataset...")
 
-    # Romeo and Juliet on Project Gutenberg (ID: 1513)
-    url = "https://www.gutenberg.org/cache/epub/1513/pg1513.txt"
+    # Load the Project Gutenberg dataset
+    dataset = load_dataset("manu/project_gutenberg", "en", split="train", streaming=True)
 
-    response = requests.get(url)
-    response.raise_for_status()
+    # Romeo and Juliet metadata
+    # Search for Romeo and Juliet by title or ID (1513)
+    target_titles = [
+        "Romeo and Juliet",
+        "The Tragedy of Romeo and Juliet",
+        "romeo and juliet"
+    ]
 
-    text = response.text
+    text = None
+    count = 0
+
+    # Stream through dataset to find Romeo and Juliet
+    for item in dataset:
+        count += 1
+        if count % 100 == 0:
+            print(f"  Searched through {count} books...")
+
+        # Check title
+        title = item.get('title', '').strip()
+
+        # Check if this is Romeo and Juliet
+        if any(target.lower() in title.lower() for target in target_titles):
+            print(f"  Found: {title}")
+            text = item.get('text', '')
+            break
+
+        # Also check by Gutenberg ID if available
+        if 'id' in item and str(item['id']) == '1513':
+            print(f"  Found by ID: {title}")
+            text = item.get('text', '')
+            break
+
+        # Limit search to first 2000 books to avoid excessive searching
+        if count >= 2000:
+            print(f"  Searched {count} books, switching to direct URL method...")
+            break
+
+    # Fallback: if not found in HuggingFace dataset, use direct URL
+    if not text:
+        print("  Romeo and Juliet not found in streamed dataset.")
+        print("  Using alternative method: direct Project Gutenberg URL...")
+        import requests
+        url = "https://www.gutenberg.org/cache/epub/1513/pg1513.txt"
+        response = requests.get(url)
+        response.raise_for_status()
+        text = response.text
+
     print(f"Fetched {len(text)} characters")
 
     # Remove Project Gutenberg header and footer
