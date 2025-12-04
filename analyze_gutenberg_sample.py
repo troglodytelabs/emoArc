@@ -14,6 +14,7 @@ import numpy as np
 from typing import List, Dict, Tuple
 import json
 from pathlib import Path
+import random
 
 # Emotion labels (adjust based on your model's training)
 EMOTION_LABELS = ['anger', 'anticipation', 'disgust', 'fear', 'joy', 'sadness', 'surprise', 'trust']
@@ -82,14 +83,30 @@ def extract_title_from_text(text: str) -> str:
     return None
 
 
-def clean_text(text: str, min_length: int = 1000) -> Tuple[str, str]:
+def extract_author_from_text(text: str) -> str:
+    """Extract author from Project Gutenberg metadata within text"""
+    # Look for "Author: " pattern in the text
+    author_pattern = r'Author:\s*(.+?)(?:\n|\r)'
+    match = re.search(author_pattern, text, re.IGNORECASE)
+
+    if match:
+        author = match.group(1).strip()
+        # Remove any trailing metadata or special characters
+        author = re.sub(r'\s*\[.*?\]\s*$', '', author)
+        return author
+
+    return None
+
+
+def clean_text(text: str, min_length: int = 1000) -> Tuple[str, str, str]:
     """
     Clean and validate text from Project Gutenberg.
-    Returns tuple of (cleaned_text, extracted_title)
+    Returns tuple of (cleaned_text, extracted_title, extracted_author)
     """
 
-    # Extract title before cleaning
+    # Extract title and author before cleaning
     extracted_title = extract_title_from_text(text)
+    extracted_author = extract_author_from_text(text)
 
     # Remove Project Gutenberg header - find the actual start of content
     start_markers = [
@@ -154,9 +171,9 @@ def clean_text(text: str, min_length: int = 1000) -> Tuple[str, str]:
 
     # Return None if text is too short
     if len(text) < min_length:
-        return None, None
+        return None, None, None
 
-    return text, extracted_title
+    return text, extracted_title, extracted_author
 
 
 def split_into_normalized_segments(text: str, num_segments: int = 10) -> List[str]:
@@ -239,15 +256,21 @@ def analyze_book(text: str, fallback_title: str, model: nn.Module,
         Dictionary with title, segments, and emotion analysis results
     """
 
-    # Clean the text and extract title
+    # Clean the text and extract title and author
     result = clean_text(text)
     if not result or result[0] is None:
         return None
 
-    cleaned_text, extracted_title = result
+    cleaned_text, extracted_title, extracted_author = result
 
     # Use extracted title if available, otherwise use fallback
     title = extracted_title if extracted_title else fallback_title
+
+    # Format as "title by author" if author is available
+    if extracted_author:
+        display_title = f"{title} by {extracted_author}"
+    else:
+        display_title = title
 
     # Split into normalized segments
     segments = split_into_normalized_segments(cleaned_text, num_segments=num_segments)
@@ -255,7 +278,7 @@ def analyze_book(text: str, fallback_title: str, model: nn.Module,
     if not segments or len(segments) < num_segments - 1:  # Allow 1 missing segment
         return None
 
-    print(f"  Title: {title}")
+    print(f"  Title: {display_title}")
     print(f"  Analyzing {len(segments)} segments (each ~{len(cleaned_text)//num_segments} chars)...")
 
     # Analyze each segment
@@ -265,7 +288,8 @@ def analyze_book(text: str, fallback_title: str, model: nn.Module,
         segment_emotions.append(emotions)
 
     return {
-        'title': title,
+        'title': display_title,
+        'author': extracted_author,
         'num_segments': len(segments),
         'segment_emotions': segment_emotions,
         'avg_emotions': calculate_average_emotions(segment_emotions),
@@ -288,16 +312,33 @@ def calculate_average_emotions(segment_emotions: List[Dict[str, float]]) -> Dict
 
 
 def fetch_and_analyze_sample(model: nn.Module, tokenizer: RobertaTokenizer,
-                             num_books: int = 100, device: str = 'cpu') -> List[Dict]:
-    """Fetch and analyze a sample of books from Project Gutenberg"""
-    print(f"\nFetching {num_books} books from HuggingFace Project Gutenberg dataset...")
+                             num_books: int = 100, device: str = 'cpu',
+                             shuffle_buffer_size: int = 1000, seed: int = 42) -> List[Dict]:
+    """
+    Fetch and analyze a random sample of books from Project Gutenberg.
 
-    # Load dataset in streaming mode
+    Args:
+        model: Trained emotion classification model
+        tokenizer: RoBERTa tokenizer
+        num_books: Number of books to analyze
+        device: Device to run inference on
+        shuffle_buffer_size: Size of buffer for shuffling (larger = more random)
+        seed: Random seed for reproducibility
+
+    Returns:
+        List of analysis results
+    """
+    print(f"\nFetching random sample of {num_books} books from HuggingFace Project Gutenberg dataset...")
+    print(f"Using shuffle buffer size: {shuffle_buffer_size}, seed: {seed}")
+
+    # Load dataset in streaming mode with shuffling
     dataset = load_dataset("manu/project_gutenberg", split="en", streaming=True)
+    dataset = dataset.shuffle(seed=seed, buffer_size=shuffle_buffer_size)
 
     results = []
     processed = 0
     skipped = 0
+    seen_books = set()  # Track (title, author) pairs to avoid duplicates
 
     for item in dataset:
         if processed >= num_books:
@@ -309,6 +350,19 @@ def fetch_and_analyze_sample(model: nn.Module, tokenizer: RobertaTokenizer,
         if not text or len(text) < 1000:
             skipped += 1
             continue
+
+        # Quick check for author in text to create unique identifier
+        # Extract author to check for duplicates before full processing
+        author = extract_author_from_text(text)
+        book_id = (fallback_title.lower(), author.lower() if author else "unknown")
+
+        # Skip if we've already seen this book
+        if book_id in seen_books:
+            skipped += 1
+            print(f"\n  ⊘ Skipping duplicate: {fallback_title}" + (f" by {author}" if author else ""))
+            continue
+
+        seen_books.add(book_id)
 
         print(f"\n[{processed + 1}/{num_books}] Processing...")
 
@@ -329,8 +383,8 @@ def fetch_and_analyze_sample(model: nn.Module, tokenizer: RobertaTokenizer,
             continue
 
     print(f"\n{'='*80}")
-    print(f"Processed: {processed} books")
-    print(f"Skipped: {skipped} books")
+    print(f"Processed: {processed} unique books")
+    print(f"Skipped: {skipped} books (duplicates, too short, or errors)")
     print(f"{'='*80}\n")
 
     return results
