@@ -67,43 +67,96 @@ def load_model(model_path: str, device: str = 'cpu') -> Tuple[nn.Module, Roberta
     return model, tokenizer
 
 
-def clean_text(text: str, min_length: int = 1000) -> str:
-    """Clean and validate text from Project Gutenberg"""
+def extract_title_from_text(text: str) -> str:
+    """Extract title from Project Gutenberg metadata within text"""
+    # Look for "Title: " pattern in the text
+    title_pattern = r'Title:\s*(.+?)(?:\n|\r)'
+    match = re.search(title_pattern, text, re.IGNORECASE)
 
-    # Remove Project Gutenberg header and footer
+    if match:
+        title = match.group(1).strip()
+        # Remove any trailing punctuation or extra info
+        title = re.sub(r'\s*\[.*?\]\s*$', '', title)  # Remove [eBook #...]
+        return title
+
+    return None
+
+
+def clean_text(text: str, min_length: int = 1000) -> Tuple[str, str]:
+    """
+    Clean and validate text from Project Gutenberg.
+    Returns tuple of (cleaned_text, extracted_title)
+    """
+
+    # Extract title before cleaning
+    extracted_title = extract_title_from_text(text)
+
+    # Remove Project Gutenberg header - find the actual start of content
     start_markers = [
         "*** START OF THE PROJECT GUTENBERG EBOOK",
         "*** START OF THIS PROJECT GUTENBERG EBOOK",
         "*END*THE SMALL PRINT"
     ]
+
+    # Find header marker
+    start_idx = -1
+    for marker in start_markers:
+        idx = text.find(marker)
+        if idx != -1:
+            start_idx = idx
+            # Find the end of the header section (usually after "***" line)
+            # Skip past the marker line and any metadata
+            remaining = text[idx:]
+            lines = remaining.split('\n')
+
+            # Skip past metadata section (Title, Author, Release Date, etc.)
+            content_start = 0
+            for i, line in enumerate(lines):
+                # Content typically starts after empty lines following metadata
+                # or after a series of asterisks
+                if i > 5 and line.strip() == '' and i + 1 < len(lines):
+                    # Check if next few lines look like actual content (not metadata)
+                    next_line = lines[i + 1].strip()
+                    if next_line and not next_line.startswith(('Title:', 'Author:', 'Release Date:',
+                                                                'Language:', 'Character set:',
+                                                                'Produced by', '***', 'www.gutenberg')):
+                        content_start = i + 1
+                        break
+
+            if content_start > 0:
+                text = '\n'.join(lines[content_start:])
+            else:
+                # Fallback: skip first 20 lines after marker
+                text = '\n'.join(lines[20:])
+            break
+
+    # Remove Project Gutenberg footer
     end_markers = [
         "*** END OF THE PROJECT GUTENBERG EBOOK",
         "*** END OF THIS PROJECT GUTENBERG EBOOK",
         "End of the Project Gutenberg EBook",
-        "End of Project Gutenberg's"
+        "End of Project Gutenberg's",
+        "***END OF THE PROJECT GUTENBERG"
     ]
 
-    # Find and remove header
-    for marker in start_markers:
-        start_idx = text.find(marker)
-        if start_idx != -1:
-            # Skip to next line after marker
-            text = text[start_idx:]
-            text = '\n'.join(text.split('\n')[1:])
-            break
-
-    # Find and remove footer
     for marker in end_markers:
         end_idx = text.find(marker)
         if end_idx != -1:
             text = text[:end_idx]
             break
 
-    # Return None if text is too short
-    if len(text.strip()) < min_length:
-        return None
+    # Remove common footer patterns that might remain
+    text = re.sub(r'\n\s*End of (?:the )?Project Gutenberg.*$', '', text, flags=re.IGNORECASE | re.DOTALL)
 
-    return text.strip()
+    # Clean up excessive whitespace
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    text = text.strip()
+
+    # Return None if text is too short
+    if len(text) < min_length:
+        return None, None
+
+    return text, extracted_title
 
 
 def split_into_normalized_segments(text: str, num_segments: int = 10) -> List[str]:
@@ -168,7 +221,7 @@ def analyze_emotion(text: str, model: nn.Module, tokenizer: RobertaTokenizer,
     return emotion_scores
 
 
-def analyze_book(text: str, title: str, model: nn.Module,
+def analyze_book(text: str, fallback_title: str, model: nn.Module,
                 tokenizer: RobertaTokenizer, device: str = 'cpu',
                 num_segments: int = 10) -> Dict:
     """
@@ -176,7 +229,7 @@ def analyze_book(text: str, title: str, model: nn.Module,
 
     Args:
         text: Full text of the book
-        title: Title of the book
+        fallback_title: Fallback title if extraction fails
         model: Trained emotion classification model
         tokenizer: RoBERTa tokenizer
         device: Device to run inference on
@@ -186,10 +239,15 @@ def analyze_book(text: str, title: str, model: nn.Module,
         Dictionary with title, segments, and emotion analysis results
     """
 
-    # Clean the text
-    cleaned_text = clean_text(text)
-    if not cleaned_text:
+    # Clean the text and extract title
+    result = clean_text(text)
+    if not result or result[0] is None:
         return None
+
+    cleaned_text, extracted_title = result
+
+    # Use extracted title if available, otherwise use fallback
+    title = extracted_title if extracted_title else fallback_title
 
     # Split into normalized segments
     segments = split_into_normalized_segments(cleaned_text, num_segments=num_segments)
@@ -197,6 +255,7 @@ def analyze_book(text: str, title: str, model: nn.Module,
     if not segments or len(segments) < num_segments - 1:  # Allow 1 missing segment
         return None
 
+    print(f"  Title: {title}")
     print(f"  Analyzing {len(segments)} segments (each ~{len(cleaned_text)//num_segments} chars)...")
 
     # Analyze each segment
@@ -244,17 +303,17 @@ def fetch_and_analyze_sample(model: nn.Module, tokenizer: RobertaTokenizer,
         if processed >= num_books:
             break
 
-        title = item.get('title', 'Unknown').strip()
+        fallback_title = item.get('title', 'Unknown').strip()
         text = item.get('text', '')
 
         if not text or len(text) < 1000:
             skipped += 1
             continue
 
-        print(f"\n[{processed + 1}/{num_books}] Processing: {title}")
+        print(f"\n[{processed + 1}/{num_books}] Processing...")
 
         try:
-            result = analyze_book(text, title, model, tokenizer, device)
+            result = analyze_book(text, fallback_title, model, tokenizer, device)
 
             if result:
                 results.append(result)
