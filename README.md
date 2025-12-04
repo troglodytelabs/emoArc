@@ -1,34 +1,55 @@
 # emoArc
 discovering narrative patterns through distributed affective analysis
 
-## Romeo and Juliet Emotional Arc Analysis
+## Scripts
+
+### 1. Romeo and Juliet Emotional Arc Analysis (`test_roberta_romeo_juliet.py`)
 
 Test RoBERTa emotion model on Romeo and Juliet from Project Gutenberg.
 
-### Setup
-
-```bash
-pip install -r requirements.txt
-```
-
-### Usage
-
+**Usage:**
 ```bash
 python test_roberta_romeo_juliet.py
 ```
 
-### What it does
-
-1. Loads your trained RoBERTa model from the specified path
-2. Fetches Romeo and Juliet from Project Gutenberg
+**What it does:**
+1. Loads your trained RoBERTa model
+2. Fetches Romeo and Juliet from HuggingFace Project Gutenberg dataset
 3. Splits the play into Acts and Scenes
-4. Analyzes emotions for each chapter (8 emotions: anger, anticipation, disgust, fear, joy, sadness, surprise, trust)
-5. Generates visualizations and saves results
+4. Analyzes emotions for each chapter
+5. Generates emotional arc visualization
 
-### Output
+**Output:**
+- `romeo_juliet_emotions.json` - Emotion scores per chapter
+- `romeo_juliet_emotional_arc.png` - Visualization
 
-- `romeo_juliet_emotions.json` - JSON file with emotion scores for each chapter
-- `romeo_juliet_emotional_arc.png` - Visualization showing emotional arc across the story
+### 2. Sample Analysis (`analyze_gutenberg_sample.py`) **RECOMMENDED**
+
+Efficiently analyzes emotional arcs across 100 Project Gutenberg books.
+
+**Usage:**
+```bash
+python analyze_gutenberg_sample.py
+```
+
+**What it does:**
+1. Streams first 100 books from Project Gutenberg dataset
+2. Splits each book into text chunks
+3. Analyzes emotions for each chunk (8 emotions: anger, anticipation, disgust, fear, joy, sadness, surprise, trust)
+4. Calculates average emotions per book
+5. Generates comparative visualizations
+
+**Output:**
+- `gutenberg_sample_analysis.json` - Full results for all books
+- `emotion_distributions.png` - Distribution of emotions across all books
+- `top_joyful_books.png` - Top 10 books by joy score
+- `top_sad_books.png` - Top 10 books by sadness score
+
+## Setup
+
+```bash
+pip install -r requirements.txt
+```
 
 ### Model Path
 
