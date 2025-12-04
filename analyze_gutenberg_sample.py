@@ -106,19 +106,37 @@ def clean_text(text: str, min_length: int = 1000) -> str:
     return text.strip()
 
 
-def split_into_chunks(text: str, chunk_size: int = 3000, overlap: int = 500) -> List[str]:
-    """Split text into overlapping chunks for analysis"""
-    chunks = []
-    words = text.split()
+def split_into_normalized_segments(text: str, num_segments: int = 10) -> List[str]:
+    """
+    Split text into N equal segments based on character percentage.
+    This enables comparing emotional arcs across books of different lengths.
 
-    i = 0
-    while i < len(words):
-        chunk = ' '.join(words[i:i + chunk_size])
-        if len(chunk.strip()) > 100:  # Only add non-empty chunks
-            chunks.append(chunk)
-        i += chunk_size - overlap
+    Args:
+        text: The full text to split
+        num_segments: Number of segments to divide the text into (default: 10 for 10% increments)
 
-    return chunks
+    Returns:
+        List of text segments, each representing an equal portion of the book
+    """
+    text = text.strip()
+    text_length = len(text)
+
+    if text_length < num_segments * 100:  # Need at least 100 chars per segment
+        return None
+
+    segments = []
+    segment_size = text_length // num_segments
+
+    for i in range(num_segments):
+        start_idx = i * segment_size
+        # For the last segment, go to the end to capture any remainder
+        end_idx = (i + 1) * segment_size if i < num_segments - 1 else text_length
+
+        segment = text[start_idx:end_idx]
+        if len(segment.strip()) > 50:  # Only add non-empty segments
+            segments.append(segment)
+
+    return segments
 
 
 def analyze_emotion(text: str, model: nn.Module, tokenizer: RobertaTokenizer,
@@ -151,49 +169,61 @@ def analyze_emotion(text: str, model: nn.Module, tokenizer: RobertaTokenizer,
 
 
 def analyze_book(text: str, title: str, model: nn.Module,
-                tokenizer: RobertaTokenizer, device: str = 'cpu') -> Dict:
-    """Analyze emotional arc for an entire book"""
+                tokenizer: RobertaTokenizer, device: str = 'cpu',
+                num_segments: int = 10) -> Dict:
+    """
+    Analyze emotional arc for an entire book using normalized segmentation.
+
+    Args:
+        text: Full text of the book
+        title: Title of the book
+        model: Trained emotion classification model
+        tokenizer: RoBERTa tokenizer
+        device: Device to run inference on
+        num_segments: Number of equal segments to divide the book into (default: 10)
+
+    Returns:
+        Dictionary with title, segments, and emotion analysis results
+    """
 
     # Clean the text
     cleaned_text = clean_text(text)
     if not cleaned_text:
         return None
 
-    # Split into chunks (representing chapters/sections)
-    chunks = split_into_chunks(cleaned_text, chunk_size=3000, overlap=500)
+    # Split into normalized segments
+    segments = split_into_normalized_segments(cleaned_text, num_segments=num_segments)
 
-    if len(chunks) < 3:  # Skip very short books
+    if not segments or len(segments) < num_segments - 1:  # Allow 1 missing segment
         return None
 
-    print(f"  Analyzing {len(chunks)} chunks...")
+    print(f"  Analyzing {len(segments)} segments (each ~{len(cleaned_text)//num_segments} chars)...")
 
-    # Analyze each chunk
-    chunk_emotions = []
-    for i, chunk in enumerate(chunks):
-        if i % 10 == 0 and i > 0:
-            print(f"    Processed {i}/{len(chunks)} chunks")
-
-        emotions = analyze_emotion(chunk, model, tokenizer, device)
-        chunk_emotions.append(emotions)
+    # Analyze each segment
+    segment_emotions = []
+    for i, segment in enumerate(segments):
+        emotions = analyze_emotion(segment, model, tokenizer, device)
+        segment_emotions.append(emotions)
 
     return {
         'title': title,
-        'num_chunks': len(chunks),
-        'chunk_emotions': chunk_emotions,
-        'avg_emotions': calculate_average_emotions(chunk_emotions)
+        'num_segments': len(segments),
+        'segment_emotions': segment_emotions,
+        'avg_emotions': calculate_average_emotions(segment_emotions),
+        'text_length': len(cleaned_text)
     }
 
 
-def calculate_average_emotions(chunk_emotions: List[Dict[str, float]]) -> Dict[str, float]:
-    """Calculate average emotion scores across all chunks"""
+def calculate_average_emotions(segment_emotions: List[Dict[str, float]]) -> Dict[str, float]:
+    """Calculate average emotion scores across all segments"""
     avg_emotions = {emotion: 0.0 for emotion in EMOTION_LABELS}
 
-    for emotions in chunk_emotions:
+    for emotions in segment_emotions:
         for emotion, score in emotions.items():
             avg_emotions[emotion] += score
 
     for emotion in avg_emotions:
-        avg_emotions[emotion] /= len(chunk_emotions)
+        avg_emotions[emotion] /= len(segment_emotions)
 
     return avg_emotions
 
@@ -302,6 +332,109 @@ def plot_emotion_distributions(results: List[Dict], output_file: str = 'emotion_
     print(f"Visualization saved to {output_file}")
 
 
+def plot_comparative_arcs(results: List[Dict], emotion: str = 'joy',
+                         num_books: int = 20, output_file: str = 'comparative_emotional_arcs.png'):
+    """
+    Plot normalized emotional arcs for multiple books on the same chart.
+    This shows how emotions evolve across the story arc (beginning to end).
+    """
+    print(f"\nGenerating comparative emotional arcs for {emotion}...")
+
+    # Sort by average emotion and take top N
+    sorted_results = sorted(results,
+                          key=lambda x: x['avg_emotions'][emotion],
+                          reverse=True)[:num_books]
+
+    fig, ax = plt.subplots(figsize=(14, 8))
+
+    # Create color gradient
+    colors = plt.cm.viridis(np.linspace(0.2, 0.9, len(sorted_results)))
+
+    for idx, result in enumerate(sorted_results):
+        segment_emotions = result['segment_emotions']
+        num_segments = len(segment_emotions)
+
+        # Extract emotion scores across segments
+        emotion_progression = [seg[emotion] for seg in segment_emotions]
+
+        # X-axis: percentage through the book
+        x_values = np.linspace(0, 100, num_segments)
+
+        # Plot with transparency
+        label = result['title'][:40] + '...' if len(result['title']) > 40 else result['title']
+        ax.plot(x_values, emotion_progression,
+               label=label, linewidth=1.5, alpha=0.6, color=colors[idx])
+
+    ax.set_xlabel('Progress Through Book (%)', fontsize=12)
+    ax.set_ylabel(f'{emotion.capitalize()} Score', fontsize=12)
+    ax.set_title(f'Comparative {emotion.capitalize()} Arcs Across {len(sorted_results)} Books',
+                fontsize=14, fontweight='bold')
+    ax.grid(True, alpha=0.3)
+    ax.set_xlim(0, 100)
+
+    # Place legend outside plot
+    ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
+
+    plt.tight_layout()
+    plt.savefig(output_file, dpi=300, bbox_inches='tight')
+    print(f"Visualization saved to {output_file}")
+
+
+def plot_average_emotional_arc(results: List[Dict], output_file: str = 'average_emotional_arc.png'):
+    """
+    Plot the average emotional arc across all books.
+    Shows the typical emotion progression from beginning to end.
+    """
+    print(f"\nGenerating average emotional arc across all books...")
+
+    # Determine number of segments (should be consistent, but check)
+    num_segments = results[0]['num_segments']
+
+    # Initialize emotion accumulator
+    emotion_sums = {emotion: [0.0] * num_segments for emotion in EMOTION_LABELS}
+    counts = [0] * num_segments
+
+    # Accumulate emotions across all books
+    for result in results:
+        segment_emotions = result['segment_emotions']
+        for i, seg_emotions in enumerate(segment_emotions):
+            if i < num_segments:
+                for emotion in EMOTION_LABELS:
+                    emotion_sums[emotion][i] += seg_emotions[emotion]
+                counts[i] += 1
+
+    # Calculate averages
+    emotion_avgs = {}
+    for emotion in EMOTION_LABELS:
+        emotion_avgs[emotion] = [
+            emotion_sums[emotion][i] / counts[i] if counts[i] > 0 else 0
+            for i in range(num_segments)
+        ]
+
+    # Create visualization
+    fig, ax = plt.subplots(figsize=(14, 8))
+
+    x_values = np.linspace(0, 100, num_segments)
+    colors = plt.cm.tab10(range(len(EMOTION_LABELS)))
+
+    for idx, emotion in enumerate(EMOTION_LABELS):
+        ax.plot(x_values, emotion_avgs[emotion],
+               label=emotion.capitalize(), linewidth=2.5,
+               marker='o', markersize=6, color=colors[idx])
+
+    ax.set_xlabel('Progress Through Story (%)', fontsize=12)
+    ax.set_ylabel('Average Emotion Score', fontsize=12)
+    ax.set_title(f'Average Emotional Arc Pattern Across {len(results)} Books',
+                fontsize=14, fontweight='bold')
+    ax.grid(True, alpha=0.3)
+    ax.set_xlim(0, 100)
+    ax.legend(loc='best', fontsize=10)
+
+    plt.tight_layout()
+    plt.savefig(output_file, dpi=300, bbox_inches='tight')
+    print(f"Visualization saved to {output_file}")
+
+
 def plot_top_books(results: List[Dict], emotion: str = 'joy',
                   top_n: int = 10, output_file: str = 'top_books_by_emotion.png'):
     """Plot books with highest scores for a specific emotion"""
@@ -394,6 +527,9 @@ def main():
 
     # Step 4: Generate visualizations
     plot_emotion_distributions(results, 'emotion_distributions.png')
+    plot_average_emotional_arc(results, 'average_emotional_arc.png')
+    plot_comparative_arcs(results, emotion='joy', num_books=20, output_file='comparative_joy_arcs.png')
+    plot_comparative_arcs(results, emotion='sadness', num_books=20, output_file='comparative_sadness_arcs.png')
     plot_top_books(results, emotion='joy', top_n=10, output_file='top_joyful_books.png')
     plot_top_books(results, emotion='sadness', top_n=10, output_file='top_sad_books.png')
 
@@ -403,6 +539,14 @@ def main():
     print("\n" + "="*80)
     print("Analysis complete!")
     print("="*80)
+    print("\nGenerated files:")
+    print("  - gutenberg_sample_analysis.json (raw data)")
+    print("  - emotion_distributions.png (distribution stats)")
+    print("  - average_emotional_arc.png (average arc across all books)")
+    print("  - comparative_joy_arcs.png (20 books overlaid)")
+    print("  - comparative_sadness_arcs.png (20 books overlaid)")
+    print("  - top_joyful_books.png (top 10 by joy)")
+    print("  - top_sad_books.png (top 10 by sadness)")
 
 
 if __name__ == "__main__":
