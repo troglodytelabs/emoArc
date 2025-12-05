@@ -1,5 +1,8 @@
 """
 Recommendation system based on emotion trajectory similarity.
+- Uses per-book normalized emotion scores (z-scores and ratios) for better comparison
+- Emotion ratios make books of different lengths/intensities comparable
+- Z-scores highlight what makes each book emotionally distinctive
 """
 
 from pyspark.sql import SparkSession, Window
@@ -12,6 +15,7 @@ from pyspark.sql.functions import (
     min as spark_min,
     max as spark_max,
     row_number,
+    coalesce,
 )
 from pyspark.sql.types import DoubleType
 import math
@@ -63,9 +67,15 @@ def compute_feature_similarity(
     """
     Compute feature-based similarity for all books compared to the liked book.
 
-    Uses normalized Euclidean distance on 11 features:
-    - 8 Plutchik emotion averages
-    - 3 VAD scores (valence, arousal, dominance)
+    Uses emotion RATIOS when available (ratio_*), which represent
+    the proportion of each emotion relative to total emotion. This makes
+    books of different lengths/intensities comparable.
+
+    Falls back to normalized averages if ratios not available.
+
+    Features used:
+    - 8 emotion ratios (or averages): anger, anticipation, disgust, fear, joy, sadness, surprise, trust
+    - 3 VAD scores (valence, arousal, dominance) - already normalized 0-1
 
     Args:
         spark: SparkSession
@@ -82,12 +92,125 @@ def compute_feature_similarity(
 
     liked_row = liked_book[0]
 
+    # Check if ratio columns are available (from improved trajectory_analyzer)
+    use_ratios = "ratio_anger" in trajectory_df.columns
+
     # Extract feature values (handle None)
-    def get_val(val):
-        return val if val is not None else 0.0
+    def get_val(row, col_name, default=0.0):
+        try:
+            val = row[col_name]
+            return val if val is not None else default
+        except (KeyError, TypeError):
+            return default
 
     # Compute min/max for normalization (exclude the liked book to avoid bias)
     other_books = trajectory_df.filter(col("book_id") != liked_book_id)
+
+    if use_ratios:
+        # Use emotion ratios - they're already normalized (sum to 1)
+        # Apply DISCRIMINATIVE WEIGHTING based on genre differentiation analysis:
+        # - Fear, Joy have highest std (2.13%, 1.92%) → weight = 3.0
+        # - Trust has high std but is uniform across genres → weight = 0.5
+        # - Anticipation has high std → weight = 2.0
+        # - Others (anger, sadness, disgust, surprise) → weight = 1.5
+        # - VAD scores show big differences across genres → weight = 4.0
+
+        # Get liked book ratios
+        liked_anger = get_val(liked_row, "ratio_anger", 0.125)
+        liked_anticipation = get_val(liked_row, "ratio_anticipation", 0.125)
+        liked_disgust = get_val(liked_row, "ratio_disgust", 0.125)
+        liked_fear = get_val(liked_row, "ratio_fear", 0.125)
+        liked_joy = get_val(liked_row, "ratio_joy", 0.125)
+        liked_sadness = get_val(liked_row, "ratio_sadness", 0.125)
+        liked_surprise = get_val(liked_row, "ratio_surprise", 0.125)
+        liked_trust = get_val(liked_row, "ratio_trust", 0.125)
+
+        # VAD scores - multiply by 10 to scale from [-1,1] to comparable range
+        liked_valence = get_val(liked_row, "avg_valence", 0.5)
+        liked_arousal = get_val(liked_row, "avg_arousal", 0.5)
+        liked_dominance = get_val(liked_row, "avg_dominance", 0.5)
+
+        # Use coalesce to handle potentially missing columns
+        # Apply discriminative weights to emphasize genre-distinguishing features
+        feature_sim_df = other_books.withColumn(
+            "feature_similarity",
+            1.0
+            / (
+                1.0
+                + sqrt(
+                    # HIGH discriminative emotions (fear, joy) - weight 3.0
+                    pow((coalesce(col("ratio_fear"), lit(0.125)) - liked_fear) * 3.0, 2)
+                    + pow((coalesce(col("ratio_joy"), lit(0.125)) - liked_joy) * 3.0, 2)
+                    # MEDIUM discriminative emotions - weight 2.0
+                    + pow(
+                        (
+                            coalesce(col("ratio_anticipation"), lit(0.125))
+                            - liked_anticipation
+                        )
+                        * 2.0,
+                        2,
+                    )
+                    + pow(
+                        (coalesce(col("ratio_sadness"), lit(0.125)) - liked_sadness)
+                        * 2.0,
+                        2,
+                    )
+                    + pow(
+                        (coalesce(col("ratio_anger"), lit(0.125)) - liked_anger) * 1.5,
+                        2,
+                    )
+                    + pow(
+                        (coalesce(col("ratio_disgust"), lit(0.125)) - liked_disgust)
+                        * 1.5,
+                        2,
+                    )
+                    + pow(
+                        (coalesce(col("ratio_surprise"), lit(0.125)) - liked_surprise)
+                        * 1.5,
+                        2,
+                    )
+                    # LOW discriminative (trust is uniform) - weight 0.5
+                    + pow(
+                        (coalesce(col("ratio_trust"), lit(0.125)) - liked_trust) * 0.5,
+                        2,
+                    )
+                    # VAD features - amplified (weight 4.0) as they show larger genre differences
+                    + pow(
+                        (coalesce(col("avg_valence"), lit(0.5)) - liked_valence) * 4.0,
+                        2,
+                    )
+                    + pow(
+                        (coalesce(col("avg_arousal"), lit(0.5)) - liked_arousal) * 4.0,
+                        2,
+                    )
+                    + pow(
+                        (coalesce(col("avg_dominance"), lit(0.5)) - liked_dominance)
+                        * 4.0,
+                        2,
+                    )
+                )
+            ),
+        ).select(
+            "book_id",
+            "title",
+            "author",
+            "feature_similarity",
+            "avg_anger",
+            "avg_anticipation",
+            "avg_disgust",
+            "avg_fear",
+            "avg_joy",
+            "avg_sadness",
+            "avg_surprise",
+            "avg_trust",
+            "avg_valence",
+            "avg_arousal",
+        )
+
+        return feature_sim_df
+
+    # Fallback: Original approach using min-max normalization
+    # (when ratio columns not available)
 
     # Get ranges for normalization (all 8 Plutchik emotions + VAD)
     stats = other_books.agg(

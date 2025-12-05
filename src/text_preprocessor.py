@@ -1,5 +1,5 @@
 """
-Text preprocessing: chunking, stopwords removal, tokenization, stemming.
+Text preprocessing: chunking, stopwords removal, tokenization.
 """
 
 from pyspark.sql import SparkSession
@@ -20,6 +20,12 @@ try:
     nltk.data.find("corpora/stopwords")
 except LookupError:
     nltk.download("stopwords", quiet=True)
+
+# Download wordnet for lemmatization
+try:
+    nltk.data.find("corpora/wordnet")
+except LookupError:
+    nltk.download("wordnet", quiet=True)
 
 
 def load_books(
@@ -155,7 +161,6 @@ def create_chunks_df(spark: SparkSession, books_df, chunk_size: int = 10000):
         # Import inside function to ensure availability on workers
         import re
         import nltk
-        from nltk.stem import PorterStemmer
 
         # Get stopwords - download if needed
         try:
@@ -173,18 +178,23 @@ def create_chunks_df(spark: SparkSession, books_df, chunk_size: int = 10000):
         # Convert to lowercase
         text_lower = text.lower()
 
-        # Remove special characters
-        text_clean = re.sub(r"[^a-z0-9\s]", " ", text_lower)
+        # Remove special characters but keep apostrophes for contractions
+        text_clean = re.sub(r"[^a-z0-9\s']", " ", text_lower)
+
+        # Handle contractions to avoid matching partial words
+        text_clean = re.sub(r"'s\b", "", text_clean)  # Remove 's
+        text_clean = re.sub(r"n't\b", " not", text_clean)  # isn't -> is not
+        text_clean = re.sub(r"'re\b", " are", text_clean)
+        text_clean = re.sub(r"'ve\b", " have", text_clean)
+        text_clean = re.sub(r"'ll\b", " will", text_clean)
+        text_clean = re.sub(r"'d\b", " would", text_clean)
+        text_clean = re.sub(r"'", "", text_clean)  # Remove remaining apostrophes
 
         # Tokenize
         words = text_clean.split()
 
-        # Remove stopwords
+        # Remove stopwords and very short words
         words = [w for w in words if w not in stop_words and len(w) > 2]
-
-        # Stemming
-        stemmer = PorterStemmer()
-        words = [stemmer.stem(w) for w in words]
 
         return words
 
