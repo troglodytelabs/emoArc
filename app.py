@@ -13,14 +13,14 @@ from pyspark.sql.functions import col, trim
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
-from lexicon_loader import load_emotion_lexicon, load_vad_lexicon
-from text_preprocessor import create_chunks_df
-from emotion_scorer import (
-    score_chunks_with_emotions,
-    score_chunks_with_vad,
-    combine_emotion_vad_scores,
+from core import (
+    create_spark_session,
+    load_trajectories_with_types,
+    load_chunk_scores_with_types,
+    load_metadata,
+    get_input_trajectory,
+    find_books_by_emotion_preferences,
 )
-from trajectory_analyzer import analyze_trajectory
 from recommender import recommend
 
 # Page config
@@ -45,34 +45,7 @@ if "metadata_df" not in st.session_state:
 @st.cache_resource
 def get_spark_session():
     """Create and cache Spark session."""
-    spark = (
-        SparkSession.builder.appName("EmoArc Streamlit")
-        .config("spark.sql.adaptive.enabled", "true")
-        .getOrCreate()
-    )
-    spark.sparkContext.setLogLevel("WARN")
-    return spark
-
-
-def load_metadata(metadata_path="data/gutenberg_metadata.csv"):
-    """Load metadata (not cached due to Spark DataFrame serialization issues)."""
-    spark = get_spark_session()
-    metadata_df = spark.read.option("header", "true").csv(metadata_path)
-    # Filter English books only
-    metadata_df = metadata_df.filter(col("Language") == "en")
-    return metadata_df
-
-
-@st.cache_resource
-def load_lexicons(
-    emotion_lexicon="data/NRC-Emotion-Lexicon-Wordlevel-v0.92.txt",
-    vad_lexicon="data/NRC-VAD-Lexicon-v2.1.txt",
-):
-    """Load and cache lexicons."""
-    spark = get_spark_session()
-    emotion_df = load_emotion_lexicon(spark, emotion_lexicon)
-    vad_df = load_vad_lexicon(spark, vad_lexicon)
-    return emotion_df, vad_df
+    return create_spark_session("EmoArc Streamlit")
 
 
 def search_books_by_title(title_query, metadata_df, limit=20):
@@ -94,255 +67,39 @@ def search_books_by_title(title_query, metadata_df, limit=20):
     return results
 
 
-def load_trajectories_with_types(spark, trajectories_path):
-    """Load trajectories CSV and cast columns to proper types."""
-    df = spark.read.option("header", "true").csv(trajectories_path)
+def plot_topic_distribution(book_topics_pd, book_title, num_topics=10):
+    """Plot topic distribution for a book using Plotly."""
+    if book_topics_pd is None or len(book_topics_pd) == 0:
+        return None
 
-    numeric_cols = [
-        "max_anger",
-        "max_anticipation",
-        "max_disgust",
-        "max_fear",
-        "max_joy",
-        "max_sadness",
-        "max_surprise",
-        "max_trust",
-        "avg_anger",
-        "avg_anticipation",
-        "avg_disgust",
-        "avg_fear",
-        "avg_joy",
-        "avg_sadness",
-        "avg_surprise",
-        "avg_trust",
-        "avg_valence",
-        "avg_arousal",
-        "avg_dominance",
-        "valence_std",
-        "arousal_std",
-        "num_chunks",
-    ]
+    topics = book_topics_pd.iloc[0]["book_topics"]
+    if topics is None:
+        return None
 
-    for col_name in numeric_cols:
-        if col_name in df.columns:
-            df = df.withColumn(col_name, col(col_name).cast("double"))
+    # Create bar chart
+    fig = go.Figure()
 
-    return df
+    topic_labels = [f"Topic {i + 1}" for i in range(len(topics))]
+    fig.add_trace(
+        go.Bar(
+            x=topic_labels,
+            y=topics,
+            marker=dict(color="steelblue", line=dict(color="navy", width=1)),
+            text=[f"{t:.3f}" for t in topics],
+            textposition="outside",
+        )
+    )
 
+    fig.update_layout(
+        title=f"Topic Distribution: {book_title}",
+        xaxis_title="Topic",
+        yaxis_title="Probability",
+        height=400,
+        template="plotly_white",
+        showlegend=False,
+    )
 
-def load_chunk_scores_with_types(spark, chunk_scores_path):
-    """Load chunk scores CSV and cast columns to proper types."""
-    df = spark.read.option("header", "true").csv(chunk_scores_path)
-
-    if "chunk_index" in df.columns:
-        df = df.withColumn("chunk_index", col("chunk_index").cast("int"))
-
-    emotion_cols = [
-        "anger",
-        "anticipation",
-        "disgust",
-        "fear",
-        "joy",
-        "negative",
-        "positive",
-        "sadness",
-        "surprise",
-        "trust",
-    ]
-
-    for col_name in emotion_cols:
-        if col_name in df.columns:
-            df = df.withColumn(col_name, col(col_name).cast("double"))
-
-    vad_cols = ["avg_valence", "avg_arousal", "avg_dominance", "vad_word_count"]
-    for col_name in vad_cols:
-        if col_name in df.columns:
-            df = df.withColumn(col_name, col(col_name).cast("double"))
-
-    return df
-
-
-def get_input_trajectory(
-    spark,
-    book_id=None,
-    text_file=None,
-    output_dir="output",
-    books_dir="data/books",
-    metadata_path="data/gutenberg_metadata.csv",
-    emotion_lexicon="data/NRC-Emotion-Lexicon-Wordlevel-v0.92.txt",
-    vad_lexicon="data/NRC-VAD-Lexicon-v2.1.txt",
-):
-    """
-    Get trajectory for input (book ID or text file).
-
-    Returns:
-        tuple: (trajectory_df, chunk_scores_df, title, author)
-    """
-    trajectory = None
-    chunk_scores = None
-    title = None
-    author = None
-
-    # Load lexicons
-    emotion_df, vad_df = load_lexicons(emotion_lexicon, vad_lexicon)
-
-    # Case 1: Text file input
-    if text_file:
-        try:
-            with open(text_file, "r", encoding="utf-8", errors="ignore") as f:
-                text = f.read()
-            title = os.path.basename(text_file).replace(".txt", "").replace("_", " ")
-            author = "File Input"
-
-            from pyspark.sql.types import StructType, StructField, StringType
-
-            schema = StructType(
-                [
-                    StructField("book_id", StringType(), True),
-                    StructField("title", StringType(), True),
-                    StructField("author", StringType(), True),
-                    StructField("text", StringType(), True),
-                ]
-            )
-            books_df = spark.createDataFrame(
-                [("text_file", title, author, text)], schema
-            )
-
-            text_len = len(text)
-            chunk_size = 10000
-            if text_len < 20000:
-                chunk_size = max(100, text_len // 10)
-
-            chunks_df = create_chunks_df(spark, books_df, chunk_size=chunk_size)
-            emotion_scores = score_chunks_with_emotions(spark, chunks_df, emotion_df)
-            vad_scores = score_chunks_with_vad(spark, chunks_df, vad_df)
-            chunk_scores = combine_emotion_vad_scores(emotion_scores, vad_scores)
-            trajectory = analyze_trajectory(spark, chunk_scores)
-
-        except Exception as e:
-            st.error(f"Error processing text file: {e}")
-            return None, None, None, None
-
-    # Case 2: Book ID input
-    elif book_id:
-        # Try to load from main.py output first
-        chunk_scores_path = f"{output_dir}/chunk_scores"
-        trajectories_path = f"{output_dir}/trajectories"
-
-        import glob
-
-        chunk_csv_files = glob.glob(f"{chunk_scores_path}/*.csv")
-        traj_csv_files = glob.glob(f"{trajectories_path}/*.csv")
-
-        if (chunk_csv_files or os.path.exists(chunk_scores_path)) and (
-            traj_csv_files or os.path.exists(trajectories_path)
-        ):
-            try:
-                output_chunks = load_chunk_scores_with_types(spark, chunk_scores_path)
-                output_chunks = output_chunks.filter(col("book_id") == book_id)
-
-                output_trajectories = load_trajectories_with_types(
-                    spark, trajectories_path
-                )
-                output_trajectories = output_trajectories.filter(
-                    col("book_id") == book_id
-                )
-
-                if output_chunks.count() > 0 and output_trajectories.count() > 0:
-                    chunk_scores = output_chunks
-                    trajectory = output_trajectories
-                    book_info = trajectory.select("title", "author").first()
-                    title = book_info["title"]
-                    author = book_info["author"]
-            except Exception as e:
-                st.warning(f"Could not load from main.py output: {e}")
-                chunk_scores = None
-                trajectory = None
-
-        # Process from Gutenberg data if not in main.py output
-        if chunk_scores is None or trajectory is None:
-            metadata_df = load_metadata(metadata_path)
-            # Trim whitespace and compare as strings to handle any type mismatches
-            metadata_df = metadata_df.filter(
-                (col("Language") == "en")
-                & (trim(col("Etext Number")) == str(book_id).strip())
-            )
-
-            if metadata_df.count() == 0:
-                # Try without language filter in case language column has issues
-                metadata_df_retry = load_metadata(metadata_path)
-                metadata_df_retry = metadata_df_retry.filter(
-                    trim(col("Etext Number")) == str(book_id).strip()
-                )
-                if metadata_df_retry.count() == 0:
-                    st.error(f"Book {book_id} not found in Gutenberg metadata!")
-                    st.info(
-                        "💡 Tip: Make sure the book ID exists and the book file is in the data/books/ directory."
-                    )
-                    return None, None, None, None
-                else:
-                    metadata_df = metadata_df_retry
-
-            book_info = metadata_df.select(
-                col("Etext Number").alias("book_id"),
-                col("Title").alias("title"),
-                col("Authors").alias("author"),
-            ).first()
-
-            title = book_info["title"]
-            author = book_info["author"]
-
-            from pyspark.sql.types import StructType, StructField, StringType
-            import re
-
-            def read_book_text(book_id: str) -> str:
-                """Read book text from file."""
-                try:
-                    book_path = f"{books_dir}/{book_id}"
-                    with open(book_path, "r", encoding="utf-8", errors="ignore") as f:
-                        text = f.read()
-                        text = re.sub(
-                            r"\*\*\* START.*?\*\*\*", "", text, flags=re.DOTALL
-                        )
-                        text = re.sub(r"\*\*\* END.*?\*\*\*", "", text, flags=re.DOTALL)
-                        return text
-                except Exception as e:
-                    st.warning(f"Could not read book file {book_id}: {e}")
-                    return ""
-
-            book_text = read_book_text(book_id)
-            if not book_text:
-                st.error(f"Could not read book file for {book_id}!")
-                return None, None, None, None
-
-            schema = StructType(
-                [
-                    StructField("book_id", StringType(), True),
-                    StructField("title", StringType(), True),
-                    StructField("author", StringType(), True),
-                    StructField("text", StringType(), True),
-                ]
-            )
-            books_df = spark.createDataFrame(
-                [(book_id, title, author, book_text)], schema
-            )
-
-            text_len = len(book_text)
-            chunk_size = 10000
-            if text_len < 20000:
-                chunk_size = max(100, text_len // 10)
-
-            chunks_df = create_chunks_df(spark, books_df, chunk_size=chunk_size)
-            emotion_scores = score_chunks_with_emotions(spark, chunks_df, emotion_df)
-            vad_scores = score_chunks_with_vad(spark, chunks_df, vad_df)
-            chunk_scores = combine_emotion_vad_scores(emotion_scores, vad_scores)
-            trajectory = analyze_trajectory(spark, chunk_scores)
-
-    else:
-        st.error("No input specified!")
-        return None, None, None, None
-
-    return trajectory, chunk_scores, title, author
+    return fig
 
 
 def plot_emotion_trajectory(chunk_scores_pd, book_title):
@@ -505,7 +262,12 @@ def main():
     st.sidebar.title("Navigation")
     page = st.sidebar.radio(
         "Choose a page",
-        ["Book Analysis & Recommendations", "Explore Books", "About"],
+        [
+            "Book Analysis & Recommendations",
+            "Explore Books",
+            "Find Books by Emotion Preferences",
+            "About",
+        ],
     )
 
     # Initialize Spark session
@@ -518,6 +280,8 @@ def main():
         show_book_analysis_and_recommendations()
     elif page == "Explore Books":
         show_explore_books()
+    elif page == "Find Books by Emotion Preferences":
+        show_find_books_by_emotions()
     elif page == "About":
         show_about()
 
@@ -548,7 +312,9 @@ def show_book_analysis_and_recommendations():
             )
         except Exception:
             # If we can't load trajectories, just show basic info
-            st.info("💡 Trajectories found. Recommendations will compare against books in the trajectory database.")
+            st.info(
+                "💡 Trajectories found. Recommendations will compare against books in the trajectory database."
+            )
 
     # Input method selection
     input_method = st.radio(
@@ -567,7 +333,8 @@ def show_book_analysis_and_recommendations():
 
         if title_query:
             with st.spinner("Searching books..."):
-                metadata_df = load_metadata()
+                spark = st.session_state.spark
+                metadata_df = load_metadata(spark)
                 results = search_books_by_title(title_query, metadata_df, limit=20)
 
                 if results:
@@ -616,6 +383,16 @@ def show_book_analysis_and_recommendations():
     if trajectories_available:
         top_n = st.slider("Number of recommendations", 5, 20, 10, key="rec_slider")
 
+    # Option to compute topics
+    compute_topics = st.checkbox(
+        "Compute topic modeling (slower but provides topic analysis)",
+        value=False,
+        key="compute_topics",
+    )
+    num_topics = 10
+    if compute_topics:
+        num_topics = st.slider("Number of topics", 5, 20, 10, key="num_topics_slider")
+
     # Single button that does both analysis and recommendations
     if st.button("Analyze Book & Get Recommendations", type="primary"):
         # Get book_id from selected option if using title search
@@ -625,9 +402,24 @@ def show_book_analysis_and_recommendations():
         if book_id or text_file:
             with st.spinner("Processing book (this may take a minute)..."):
                 spark = st.session_state.spark
-                trajectory, chunk_scores, title, author = get_input_trajectory(
-                    spark, book_id=book_id, text_file=text_file, output_dir=output_dir
-                )
+                try:
+                    trajectory, chunk_scores, title, author, book_topics = (
+                        get_input_trajectory(
+                            spark,
+                            book_id=book_id,
+                            text_file=text_file,
+                            output_dir=output_dir,
+                            compute_topics=compute_topics,
+                            num_topics=num_topics,
+                        )
+                    )
+                except Exception as e:
+                    st.error(f"Error processing book: {e}")
+                    trajectory = None
+                    chunk_scores = None
+                    title = None
+                    author = None
+                    book_topics = None
 
                 if trajectory is not None and chunk_scores is not None:
                     # Store in session state for recommendations
@@ -727,6 +519,38 @@ def show_book_analysis_and_recommendations():
                         for emotion, value in avg_emotions.items():
                             st.write(f"- {emotion}: {value:.4f}")
 
+                    # Display topic modeling if available
+                    if book_topics is not None:
+                        st.divider()
+                        st.subheader("📊 Topic Modeling")
+                        book_topics_pd = book_topics.toPandas()
+                        topic_fig = plot_topic_distribution(
+                            book_topics_pd, title, num_topics
+                        )
+                        if topic_fig:
+                            st.plotly_chart(topic_fig, width="stretch")
+
+                            # Show top topics
+                            topics = book_topics_pd.iloc[0]["book_topics"]
+                            if topics:
+                                # Get top 5 topics
+                                topic_scores = [
+                                    (i, topics[i]) for i in range(len(topics))
+                                ]
+                                topic_scores.sort(key=lambda x: x[1], reverse=True)
+
+                                st.write("**Top Topics:**")
+                                for rank, (topic_idx, score) in enumerate(
+                                    topic_scores[:5], 1
+                                ):
+                                    st.write(
+                                        f"{rank}. Topic {topic_idx + 1}: {score:.4f}"
+                                    )
+                        else:
+                            st.info("Topic distribution not available")
+                    elif compute_topics:
+                        st.info("💡 Topic modeling is being computed...")
+
                     # Automatically show recommendations if trajectories are available
                     if trajectories_available:
                         st.divider()
@@ -737,18 +561,19 @@ def show_book_analysis_and_recommendations():
                             trajectories = load_trajectories_with_types(
                                 spark, trajectories_path
                             )
-                            
+
                             # Count total books available for comparison
                             total_books_count = trajectories.count()
-                            
+
                             # Get liked book ID
                             liked_id = trajectory.select("book_id").first()["book_id"]
-                            
+
                             # Check if the current book is already in the trajectories
-                            current_book_in_trajectories = trajectories.filter(
-                                col("book_id") == liked_id
-                            ).count() > 0
-                            
+                            current_book_in_trajectories = (
+                                trajectories.filter(col("book_id") == liked_id).count()
+                                > 0
+                            )
+
                             # Display comparison info
                             if current_book_in_trajectories:
                                 st.info(
@@ -882,20 +707,24 @@ def show_explore_books():
 
             emotion_col = f"avg_{emotion_type.lower()}"
             if emotion_col in trajectories.columns:
+                # Select columns, avoiding duplicates
+                select_cols = ["book_id", "title", "author", emotion_col]
+                additional_cols = [
+                    "avg_joy",
+                    "avg_sadness",
+                    "avg_fear",
+                    "avg_anger",
+                    "avg_valence",
+                    "avg_arousal",
+                ]
+                # Only add additional cols if they're not already selected
+                for col_name in additional_cols:
+                    if col_name not in select_cols:
+                        select_cols.append(col_name)
+
                 top_books = (
                     trajectories.orderBy(col(emotion_col).desc())
-                    .select(
-                        "book_id",
-                        "title",
-                        "author",
-                        emotion_col,
-                        "avg_joy",
-                        "avg_sadness",
-                        "avg_fear",
-                        "avg_anger",
-                        "avg_valence",
-                        "avg_arousal",
-                    )
+                    .select(*select_cols)
                     .limit(top_n)
                 )
 
@@ -904,9 +733,136 @@ def show_explore_books():
                 st.success(f"Top {top_n} books by {emotion_type}")
 
                 for idx, row in top_books_pd.iterrows():
+                    # Get emotion value safely
+                    emotion_val = row[emotion_col]
+                    # Handle case where it might be a Series (if duplicate columns exist)
+                    if hasattr(emotion_val, "iloc"):
+                        emotion_val = (
+                            emotion_val.iloc[0] if len(emotion_val) > 0 else 0.0
+                        )
+                    emotion_val = float(emotion_val) if emotion_val is not None else 0.0
+
                     st.write(f"**{idx + 1}. {row['title']}** by {row['author']}")
-                    st.write(f"   {emotion_type}: {row[emotion_col]:.4f}")
+                    st.write(f"   {emotion_type}: {emotion_val:.4f}")
                     st.write("---")
+
+
+def show_find_books_by_emotions():
+    """Show page for finding books by emotion preferences."""
+    st.header("Find Books by Emotion Preferences")
+    st.markdown(
+        "Specify what emotions you want to experience while reading, and we'll find books that match your preferences."
+    )
+
+    # Output directory
+    output_dir = "output"
+    trajectories_path = f"{output_dir}/trajectories"
+
+    if not os.path.exists(trajectories_path):
+        st.warning(
+            f"⚠️ Trajectories not found in {trajectories_path}. "
+            "Please run `python main.py` first to generate trajectories."
+        )
+        return
+
+    # Emotion preference sliders
+    st.subheader("Desired Emotion Levels")
+    st.markdown(
+        "Adjust the sliders to indicate how much of each emotion you want in your reading experience (0 = none, 1 = maximum)."
+    )
+
+    col1, col2 = st.columns(2)
+
+    emotion_preferences = {}
+
+    with col1:
+        emotion_preferences["joy"] = st.slider(
+            "Joy", 0.0, 1.0, 0.5, 0.1, key="pref_joy"
+        )
+        emotion_preferences["sadness"] = st.slider(
+            "Sadness", 0.0, 1.0, 0.0, 0.1, key="pref_sadness"
+        )
+        emotion_preferences["fear"] = st.slider(
+            "Fear", 0.0, 1.0, 0.0, 0.1, key="pref_fear"
+        )
+        emotion_preferences["anger"] = st.slider(
+            "Anger", 0.0, 1.0, 0.0, 0.1, key="pref_anger"
+        )
+
+    with col2:
+        emotion_preferences["anticipation"] = st.slider(
+            "Anticipation", 0.0, 1.0, 0.5, 0.1, key="pref_anticipation"
+        )
+        emotion_preferences["surprise"] = st.slider(
+            "Surprise", 0.0, 1.0, 0.3, 0.1, key="pref_surprise"
+        )
+        emotion_preferences["trust"] = st.slider(
+            "Trust", 0.0, 1.0, 0.5, 0.1, key="pref_trust"
+        )
+        emotion_preferences["disgust"] = st.slider(
+            "Disgust", 0.0, 1.0, 0.0, 0.1, key="pref_disgust"
+        )
+
+    # Number of results
+    top_n = st.slider("Number of books to show", 10, 50, 20, key="emotion_pref_top_n")
+
+    if st.button("Find Matching Books", type="primary"):
+        with st.spinner("Finding books that match your preferences..."):
+            spark = st.session_state.spark
+            trajectories = load_trajectories_with_types(spark, trajectories_path)
+
+            # Find matching books
+            matching_books = find_books_by_emotion_preferences(
+                spark, trajectories, emotion_preferences, top_n=top_n
+            )
+
+            if matching_books.count() == 0:
+                st.warning(
+                    "No books found. Try adjusting your emotion preferences or ensure trajectories are available."
+                )
+            else:
+                matching_books_pd = matching_books.toPandas()
+
+                st.success(
+                    f"Found {len(matching_books_pd)} books matching your preferences!"
+                )
+
+                # Display results
+                for idx, row in matching_books_pd.iterrows():
+                    with st.expander(
+                        f"{idx + 1}. {row['title']} by {row['author']} "
+                        f"(Match: {row['match_score']:.3f})"
+                    ):
+                        col1, col2 = st.columns(2)
+
+                        with col1:
+                            st.write("**Emotion Scores:**")
+                            st.write(f"- Joy: {row.get('avg_joy', 0):.4f}")
+                            st.write(f"- Sadness: {row.get('avg_sadness', 0):.4f}")
+                            st.write(f"- Fear: {row.get('avg_fear', 0):.4f}")
+                            st.write(f"- Anger: {row.get('avg_anger', 0):.4f}")
+
+                        with col2:
+                            st.write("**More Emotions:**")
+                            st.write(
+                                f"- Anticipation: {row.get('avg_anticipation', 0):.4f}"
+                            )
+                            st.write(f"- Surprise: {row.get('avg_surprise', 0):.4f}")
+                            st.write(f"- Trust: {row.get('avg_trust', 0):.4f}")
+                            st.write(f"- Disgust: {row.get('avg_disgust', 0):.4f}")
+
+                        st.write("**VAD Scores:**")
+                        st.write(f"- Valence: {row.get('avg_valence', 0):.4f}")
+                        st.write(f"- Arousal: {row.get('avg_arousal', 0):.4f}")
+
+                # Download button
+                csv = matching_books_pd.to_csv(index=False)
+                st.download_button(
+                    label="Download Results as CSV",
+                    data=csv,
+                    file_name="emotion_preference_matches.csv",
+                    mime="text/csv",
+                )
 
 
 def show_about():
