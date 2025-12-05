@@ -281,8 +281,9 @@ def create_chunks_df(spark: SparkSession, books_df, chunk_size: int = 10000, num
         col("title"),
         col("author"),
         col("chunk_index"),
-        col("chunk_text"),
         explode(col("words")).alias("word"),
     )
+    # NOTE: chunk_text is intentionally dropped here to prevent OOM errors
+    # when saving large datasets. The text is no longer needed after tokenization.
 
     return chunks_df

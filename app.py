@@ -483,22 +483,12 @@ def create_genre_radar_chart(emotion_scores, dyad_scores, genre_profiles_to_comp
     # create figure
     fig = go.Figure()
 
-    # add book's emotion profile
-    fig.add_trace(go.Scatterpolar(
-        r=values,
-        theta=categories,
-        fill='toself',
-        name='this book',
-        line=dict(color='rgb(99, 110, 250)', width=2),
-        fillcolor='rgba(99, 110, 250, 0.3)'
-    ))
-
-    # add genre comparisons if specified
+    # add genre comparisons FIRST (so they appear behind the book's profile)
     if genre_profiles_to_compare:
         colors = [
-            'rgb(239, 85, 59)',
-            'rgb(0, 204, 150)',
-            'rgb(171, 99, 250)'
+            ('rgb(239, 85, 59)', 'rgba(239, 85, 59, 0.15)'),
+            ('rgb(0, 204, 150)', 'rgba(0, 204, 150, 0.15)'),
+            ('rgb(171, 99, 250)', 'rgba(171, 99, 250, 0.15)')
         ]
         genre_profiles = get_genre_profiles()
 
@@ -512,31 +502,167 @@ def create_genre_radar_chart(emotion_scores, dyad_scores, genre_profiles_to_comp
                         min_val, max_val = profile['emotions'][cat]
                         genre_values.append((min_val + max_val) / 2)
                     else:
-                        genre_values.append(0.1)  # default low value
+                        genre_values.append(0.05)  # default low value
 
+                line_color, fill_color = colors[idx % len(colors)]
                 fig.add_trace(go.Scatterpolar(
                     r=genre_values,
                     theta=categories,
                     fill='toself',
                     name=f'typical {genre_name}',
-                    line=dict(color=colors[idx % len(colors)], width=2, dash='dash'),
-                    fillcolor=f'rgba({colors[idx % len(colors)][4:-1]}, 0.1)',
-                    opacity=0.6
+                    line=dict(color=line_color, width=2, dash='dot'),
+                    fillcolor=fill_color,
+                    opacity=0.7
                 ))
+
+    # add book's emotion profile ON TOP (more visible)
+    fig.add_trace(go.Scatterpolar(
+        r=values,
+        theta=categories,
+        fill='toself',
+        name='this book',
+        line=dict(color='rgb(99, 110, 250)', width=3),
+        fillcolor='rgba(99, 110, 250, 0.4)',
+        marker=dict(size=8)
+    ))
+
+    # calculate max value for better scaling
+    all_values = values.copy()
+    if genre_profiles_to_compare:
+        for genre_name in genre_profiles_to_compare[:3]:
+            if genre_name in get_genre_profiles():
+                profile = get_genre_profiles()[genre_name]
+                for cat in categories:
+                    if cat in profile.get('emotions', {}):
+                        min_val, max_val = profile['emotions'][cat]
+                        all_values.append(max_val)
+
+    max_val = max(all_values) if all_values else 0.4
 
     fig.update_layout(
         polar=dict(
             radialaxis=dict(
                 visible=True,
-                range=[0, max(0.4, max(values) * 1.2)]
+                range=[0, min(0.5, max_val * 1.3)],
+                tickfont=dict(size=10)
+            ),
+            angularaxis=dict(
+                tickfont=dict(size=11)
             )
         ),
         showlegend=True,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=-0.2,
+            xanchor="center",
+            x=0.5
+        ),
         title="emotion profile radar chart",
-        height=500
+        height=550
     )
 
     return fig
+
+
+def get_emotion_star_rating(score, typical_range=None):
+    """
+    convert emotion score to star rating (1-5 stars).
+    if typical_range provided, compare to that; otherwise use absolute scale.
+    """
+    if typical_range:
+        min_val, max_val = typical_range
+        midpoint = (min_val + max_val) / 2
+        # compare to midpoint of typical range
+        if score >= max_val * 1.2:
+            return "★★★★★", "very high"
+        elif score >= midpoint:
+            return "★★★★☆", "high"
+        elif score >= min_val:
+            return "★★★☆☆", "typical"
+        elif score >= min_val * 0.5:
+            return "★★☆☆☆", "low"
+        else:
+            return "★☆☆☆☆", "very low"
+    else:
+        # absolute scale
+        if score >= 0.25:
+            return "★★★★★", "very high"
+        elif score >= 0.18:
+            return "★★★★☆", "high"
+        elif score >= 0.12:
+            return "★★★☆☆", "moderate"
+        elif score >= 0.06:
+            return "★★☆☆☆", "low"
+        else:
+            return "★☆☆☆☆", "very low"
+
+
+def extract_high_emotion_passages(chunk_scores_pd, full_text, num_chunks=20, passages_per_emotion=2):
+    """
+    extract example passages from chunks with highest emotion scores.
+    returns dict mapping emotions to list of (chunk_index, score, passage) tuples.
+    """
+    if not full_text:
+        return {}
+
+    emotions = ['joy', 'fear', 'sadness', 'anger', 'surprise']
+    passages = {}
+
+    # calculate chunk boundaries
+    text_len = len(full_text)
+
+    for emotion in emotions:
+        if emotion not in chunk_scores_pd.columns:
+            continue
+
+        # find top chunks for this emotion
+        top_chunks = chunk_scores_pd.nlargest(passages_per_emotion, emotion)
+
+        emotion_passages = []
+        for _, row in top_chunks.iterrows():
+            chunk_idx = int(row['chunk_index'])
+            score = float(row[emotion])
+
+            # extract passage from full text
+            start = (chunk_idx * text_len) // num_chunks
+            end = ((chunk_idx + 1) * text_len) // num_chunks
+
+            passage = full_text[start:end]
+
+            # find a good excerpt (around 200-300 chars)
+            excerpt_start = max(0, len(passage) // 2 - 150)
+            excerpt_end = min(len(passage), excerpt_start + 300)
+            excerpt = passage[excerpt_start:excerpt_end]
+
+            # clean up excerpt (remove partial words at edges)
+            if excerpt_start > 0:
+                # find first space
+                first_space = excerpt.find(' ')
+                if first_space > 0:
+                    excerpt = excerpt[first_space + 1:]
+
+            if excerpt_end < len(passage):
+                # find last space
+                last_space = excerpt.rfind(' ')
+                if last_space > 0:
+                    excerpt = excerpt[:last_space]
+
+            # add ellipsis
+            if excerpt_start > 0:
+                excerpt = "..." + excerpt
+            if excerpt_end < len(passage):
+                excerpt = excerpt + "..."
+
+            emotion_passages.append({
+                'chunk_index': chunk_idx + 1,  # 1-indexed for display
+                'score': score,
+                'passage': excerpt.strip()
+            })
+
+        passages[emotion] = emotion_passages
+
+    return passages
 
 
 def filter_books_by_genre(spark, trajectories_df, target_genre, confidence_threshold=40):
@@ -1446,21 +1572,78 @@ def show_book_analysis_and_recommendations():
                             st.caption(f"{explanation['components']} → {explanation['description']}")
                             st.write("")  # spacing
 
-                    # basic emotion statistics
+                    # emotion statistics with comparative context
                     st.divider()
                     st.subheader("emotion statistics")
+                    st.caption("scores compared to typical genre ranges")
+
                     col1, col2 = st.columns(2)
 
                     with col1:
-                        st.write("average emotion scores:")
+                        st.write("**emotion scores with ratings:**")
+                        # get top predicted genre for comparison
+                        top_genre_profile = None
+                        if genre_matches and genre_matches[0]['genre'] in get_genre_profiles():
+                            top_genre_profile = get_genre_profiles()[genre_matches[0]['genre']]
+
                         for emotion, value in avg_emotions.items():
-                            st.write(f"{emotion}: {value:.4f}")
+                            # get typical range for this emotion in top genre
+                            typical_range = None
+                            if top_genre_profile and emotion in top_genre_profile.get('emotions', {}):
+                                typical_range = top_genre_profile['emotions'][emotion]
+
+                            stars, label = get_emotion_star_rating(value, typical_range)
+
+                            # format with stars and typical range
+                            if typical_range:
+                                min_val, max_val = typical_range
+                                st.write(f"{emotion}: {value:.3f} {stars} ({label})")
+                                st.caption(f"  typical {genre_matches[0]['genre']}: {min_val:.2f}-{max_val:.2f}")
+                            else:
+                                st.write(f"{emotion}: {value:.3f} {stars} ({label})")
 
                     with col2:
-                        st.write("vad scores:")
-                        st.write(f"valence: {trajectory_pd.get('avg_valence', 0):.4f}")
-                        st.write(f"arousal: {trajectory_pd.get('avg_arousal', 0):.4f}")
-                        st.write(f"dominance: {trajectory_pd.get('avg_dominance', 0):.4f}")
+                        st.write("**vad scores:**")
+                        valence = trajectory_pd.get('avg_valence', 0)
+                        arousal = trajectory_pd.get('avg_arousal', 0)
+                        dominance = trajectory_pd.get('avg_dominance', 0)
+
+                        v_stars, v_label = get_emotion_star_rating(valence)
+                        a_stars, a_label = get_emotion_star_rating(arousal)
+                        d_stars, d_label = get_emotion_star_rating(dominance)
+
+                        st.write(f"valence: {valence:.3f} {v_stars}")
+                        st.caption(f"  {v_label} (emotional positivity)")
+                        st.write(f"arousal: {arousal:.3f} {a_stars}")
+                        st.caption(f"  {a_label} (emotional intensity)")
+                        st.write(f"dominance: {dominance:.3f} {d_stars}")
+                        st.caption(f"  {d_label} (sense of control)")
+
+                    # example passages with high emotions
+                    if full_text:
+                        st.divider()
+                        st.subheader("example emotional passages")
+                        st.caption("excerpts from chunks with highest emotion scores")
+
+                        emotion_passages = extract_high_emotion_passages(
+                            chunk_scores_pd, full_text, num_chunks=20, passages_per_emotion=1
+                        )
+
+                        # display passages in tabs
+                        if emotion_passages:
+                            tabs = st.tabs([f"{e.title()}" for e in ['joy', 'fear', 'sadness', 'anger', 'surprise']])
+
+                            for idx, emotion in enumerate(['joy', 'fear', 'sadness', 'anger', 'surprise']):
+                                with tabs[idx]:
+                                    if emotion in emotion_passages and emotion_passages[emotion]:
+                                        for passage_info in emotion_passages[emotion]:
+                                            st.markdown(
+                                                f"**Peak {emotion.title()} (chunk {passage_info['chunk_index']}, "
+                                                f"score: {passage_info['score']:.3f})**"
+                                            )
+                                            st.info(f"_{passage_info['passage']}_")
+                                    else:
+                                        st.write(f"no strong {emotion} passages detected")
 
                     # show recommendations if trajectories available
                     if trajectories_available:

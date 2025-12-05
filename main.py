@@ -37,6 +37,9 @@ def create_spark_session(app_name: str = "EmoArc"):
         SparkSession.builder.appName(app_name)
         .config("spark.sql.adaptive.enabled", "true")
         .config("spark.sql.adaptive.coalescePartitions.enabled", "true")
+        .config("spark.driver.memory", "4g")
+        .config("spark.executor.memory", "4g")
+        .config("spark.driver.maxResultSize", "2g")
         .getOrCreate()
     )
 
@@ -249,17 +252,8 @@ def main():
         print(f"\n[Saving] Writing results to {args.output}/...")
         os.makedirs(args.output, exist_ok=True)
 
-        # Drop text columns from chunk_scores to avoid OOM (they're huge!)
-        chunk_scores_columns_to_drop = []
-        if "chunk_text" in chunk_scores.columns:
-            chunk_scores_columns_to_drop.append("chunk_text")
-        if "text" in chunk_scores.columns:
-            chunk_scores_columns_to_drop.append("text")
-
-        chunk_scores_for_csv = chunk_scores.drop(*chunk_scores_columns_to_drop) if chunk_scores_columns_to_drop else chunk_scores
-
-        # Use more partitions to avoid memory issues, then repartition for final output
-        chunk_scores_for_csv.repartition(4).write.mode("overwrite").option("header", "true").csv(
+        # Save chunk scores (text columns already dropped during preprocessing)
+        chunk_scores.repartition(4).write.mode("overwrite").option("header", "true").csv(
             f"{args.output}/chunk_scores"
         )
         print("  ✓ Chunk scores saved")
