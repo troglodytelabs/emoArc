@@ -249,22 +249,35 @@ def main():
         print(f"\n[Saving] Writing results to {args.output}/...")
         os.makedirs(args.output, exist_ok=True)
 
-        chunk_scores.coalesce(1).write.mode("overwrite").option("header", "true").csv(
+        # Drop text columns from chunk_scores to avoid OOM (they're huge!)
+        chunk_scores_columns_to_drop = []
+        if "chunk_text" in chunk_scores.columns:
+            chunk_scores_columns_to_drop.append("chunk_text")
+        if "text" in chunk_scores.columns:
+            chunk_scores_columns_to_drop.append("text")
+
+        chunk_scores_for_csv = chunk_scores.drop(*chunk_scores_columns_to_drop) if chunk_scores_columns_to_drop else chunk_scores
+
+        # Use more partitions to avoid memory issues, then repartition for final output
+        chunk_scores_for_csv.repartition(4).write.mode("overwrite").option("header", "true").csv(
             f"{args.output}/chunk_scores"
         )
+        print("  ✓ Chunk scores saved")
 
-        # Remove array columns (not supported by CSV)
-        # These can be recomputed if needed
+        # Remove array columns and text from trajectories (not supported by CSV)
         columns_to_drop = ["emotion_trajectory"]
         if "book_embedding" in trajectories.columns:
             columns_to_drop.append("book_embedding")
         if "book_topics" in trajectories.columns:
             columns_to_drop.append("book_topics")
+        if "text" in trajectories.columns:
+            columns_to_drop.append("text")
 
         trajectories_for_csv = trajectories.drop(*columns_to_drop)
         trajectories_for_csv.coalesce(1).write.mode("overwrite").option(
             "header", "true"
         ).csv(f"{args.output}/trajectories")
+        print("  ✓ Trajectories saved")
 
         print("  ✓ Results saved successfully!")
 
