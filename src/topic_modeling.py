@@ -211,24 +211,27 @@ def interpret_book_topics(book_topics, lda_model, cv_model, top_words_per_topic=
     # get vocabulary from count vectorizer
     vocab = cv_model.vocabulary
 
-    # get topic-word distributions from lda model
-    topics_matrix = lda_model.topicsMatrix()
+    # get top words for each topic using describeTopics
+    topics_described = lda_model.describeTopics(maxTermsPerTopic=top_words_per_topic)
+    topics_list = topics_described.collect()
 
     # interpret each topic
     all_topics = []
     for topic_idx in range(len(book_topics)):
         topic_prob = book_topics[topic_idx]
 
-        # get top words for this topic
-        topic_words_weights = []
-        for word_idx in range(len(vocab)):
-            weight = topics_matrix[word_idx][topic_idx]
-            word = vocab[word_idx]
-            topic_words_weights.append((word, weight))
+        # get top words for this topic from describeTopics
+        if topic_idx < len(topics_list):
+            topic_row = topics_list[topic_idx]
+            term_indices = topic_row['termIndices']
 
-        # sort by weight and get top words
-        topic_words_weights.sort(key=lambda x: x[1], reverse=True)
-        top_words = [word for word, _ in topic_words_weights[:top_words_per_topic]]
+            # convert term indices to words
+            top_words = []
+            for term_idx in term_indices:
+                if term_idx < len(vocab):
+                    top_words.append(vocab[term_idx])
+        else:
+            top_words = []
 
         all_topics.append({
             "topic_id": topic_idx,
