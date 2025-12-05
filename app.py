@@ -224,6 +224,289 @@ def analyze_emotional_journey(chunk_scores_pd):
     return insights
 
 
+def get_genre_profiles():
+    """
+    get emotion profiles for different genres.
+    each genre has expected ranges for emotions, dyads, vad, and narrative patterns.
+    """
+    return {
+        'romance': {
+            'emotions': {'joy': (0.15, 0.35), 'trust': (0.15, 0.30), 'anticipation': (0.12, 0.25), 'sadness': (0.05, 0.15)},
+            'dyads': {'love': (0.15, 0.35), 'optimism': (0.12, 0.25)},
+            'vad': {'valence': (0.55, 0.75), 'arousal': (0.45, 0.65)},
+            'narrative': ['ascent (comedic arc)', 'triumph-after-trial'],
+            'description': 'emotional stories focused on relationships and affection'
+        },
+        'thriller': {
+            'emotions': {'fear': (0.15, 0.35), 'anticipation': (0.15, 0.30), 'surprise': (0.12, 0.25)},
+            'dyads': {'awe': (0.15, 0.30), 'aggressiveness': (0.10, 0.25)},
+            'vad': {'valence': (0.35, 0.55), 'arousal': (0.60, 0.85)},
+            'narrative': ['building tension', 'rising-falling tension'],
+            'description': 'suspenseful stories with high tension and unexpected twists'
+        },
+        'horror': {
+            'emotions': {'fear': (0.20, 0.40), 'disgust': (0.15, 0.30), 'sadness': (0.12, 0.25)},
+            'dyads': {'awe': (0.15, 0.35), 'remorse': (0.10, 0.25)},
+            'vad': {'valence': (0.25, 0.45), 'arousal': (0.65, 0.90), 'dominance': (0.30, 0.50)},
+            'narrative': ['descent (tragic arc)'],
+            'description': 'dark stories designed to evoke fear and dread'
+        },
+        'war/military': {
+            'emotions': {'anger': (0.15, 0.30), 'fear': (0.12, 0.25), 'sadness': (0.10, 0.22)},
+            'dyads': {'aggressiveness': (0.15, 0.35), 'contempt': (0.10, 0.25), 'submission': (0.08, 0.20)},
+            'vad': {'valence': (0.35, 0.55), 'arousal': (0.65, 0.85), 'dominance': (0.55, 0.75)},
+            'narrative': ['tragedy-to-triumph', 'descent'],
+            'description': 'stories of conflict, combat, and military operations'
+        },
+        'adventure': {
+            'emotions': {'anticipation': (0.15, 0.35), 'joy': (0.12, 0.28), 'surprise': (0.10, 0.22)},
+            'dyads': {'optimism': (0.15, 0.35), 'aggressiveness': (0.08, 0.20)},
+            'vad': {'valence': (0.50, 0.70), 'arousal': (0.60, 0.80), 'dominance': (0.55, 0.75)},
+            'narrative': ['tragedy-to-triumph', 'triumph-after-trial'],
+            'description': 'exciting journeys with exploration and challenges'
+        },
+        'mystery': {
+            'emotions': {'anticipation': (0.15, 0.30), 'surprise': (0.12, 0.25), 'fear': (0.08, 0.20)},
+            'dyads': {'disapproval': (0.10, 0.25), 'awe': (0.08, 0.20)},
+            'vad': {'valence': (0.40, 0.60), 'arousal': (0.55, 0.75)},
+            'narrative': ['building tension', 'rising-falling tension'],
+            'description': 'puzzling stories focused on solving crimes or secrets'
+        },
+        'comedy': {
+            'emotions': {'joy': (0.20, 0.40), 'surprise': (0.12, 0.25), 'trust': (0.10, 0.22)},
+            'dyads': {'optimism': (0.15, 0.35), 'love': (0.10, 0.25)},
+            'vad': {'valence': (0.60, 0.80), 'arousal': (0.45, 0.65)},
+            'narrative': ['ascent (comedic arc)', 'triumph-after-trial'],
+            'description': 'humorous stories designed to entertain and amuse'
+        },
+        'tragedy': {
+            'emotions': {'sadness': (0.18, 0.38), 'fear': (0.12, 0.25), 'anger': (0.10, 0.22)},
+            'dyads': {'remorse': (0.15, 0.35), 'disapproval': (0.10, 0.25)},
+            'vad': {'valence': (0.25, 0.45), 'arousal': (0.50, 0.70)},
+            'narrative': ['descent (tragic arc)'],
+            'description': 'sorrowful stories of downfall and loss'
+        },
+        'noir/dark': {
+            'emotions': {'sadness': (0.15, 0.30), 'disgust': (0.12, 0.25), 'anger': (0.10, 0.22)},
+            'dyads': {'contempt': (0.15, 0.30), 'remorse': (0.12, 0.25)},
+            'vad': {'valence': (0.25, 0.45), 'arousal': (0.50, 0.70), 'dominance': (0.40, 0.60)},
+            'narrative': ['descent', 'complex narrative structure'],
+            'description': 'dark, cynical stories with morally complex characters'
+        },
+        'philosophical': {
+            'emotions': {'trust': (0.12, 0.25), 'anticipation': (0.10, 0.22), 'sadness': (0.08, 0.18)},
+            'dyads': {'submission': (0.10, 0.22), 'disapproval': (0.08, 0.18)},
+            'vad': {'valence': (0.45, 0.65), 'arousal': (0.35, 0.55)},
+            'narrative': ['steady emotional tone', 'complex narrative structure'],
+            'description': 'contemplative stories exploring ideas and meaning'
+        }
+    }
+
+
+def classify_genre_from_emotions(emotion_scores, dyad_scores, vad_scores, narrative_arc):
+    """
+    classify book genre based on emotion profile, dyads, vad scores, and narrative arc.
+    returns list of matching genres with confidence scores.
+    """
+    genre_profiles = get_genre_profiles()
+    genre_matches = []
+
+    for genre_name, profile in genre_profiles.items():
+        match_score = 0.0
+        max_possible_score = 0.0
+
+        # check emotion ranges (40% of total weight)
+        emotion_weight = 0.4
+        for emotion, (min_val, max_val) in profile.get('emotions', {}).items():
+            max_possible_score += emotion_weight / len(profile.get('emotions', {1: 1}))
+            emotion_val = emotion_scores.get(emotion, 0)
+            if min_val <= emotion_val <= max_val:
+                match_score += emotion_weight / len(profile['emotions'])
+            elif emotion_val > max_val:
+                # partial credit if close to range
+                overshoot = emotion_val - max_val
+                if overshoot < 0.1:
+                    match_score += (emotion_weight / len(profile['emotions'])) * 0.5
+            elif emotion_val < min_val:
+                # partial credit if close to range
+                undershoot = min_val - emotion_val
+                if undershoot < 0.1:
+                    match_score += (emotion_weight / len(profile['emotions'])) * 0.5
+
+        # check dyad ranges (25% of total weight)
+        dyad_weight = 0.25
+        for dyad, (min_val, max_val) in profile.get('dyads', {}).items():
+            max_possible_score += dyad_weight / len(profile.get('dyads', {1: 1}))
+            dyad_val = dyad_scores.get(dyad, 0)
+            if min_val <= dyad_val <= max_val:
+                match_score += dyad_weight / len(profile['dyads'])
+            elif min_val - 0.05 <= dyad_val <= max_val + 0.05:
+                # partial credit if very close
+                match_score += (dyad_weight / len(profile['dyads'])) * 0.5
+
+        # check vad ranges (25% of total weight)
+        vad_weight = 0.25
+        for vad_dim, (min_val, max_val) in profile.get('vad', {}).items():
+            max_possible_score += vad_weight / len(profile.get('vad', {1: 1}))
+            vad_val = vad_scores.get(vad_dim, 0.5)
+            if min_val <= vad_val <= max_val:
+                match_score += vad_weight / len(profile['vad'])
+            elif min_val - 0.1 <= vad_val <= max_val + 0.1:
+                # partial credit if close
+                match_score += (vad_weight / len(profile['vad'])) * 0.5
+
+        # check narrative arc (10% of total weight)
+        narrative_weight = 0.10
+        max_possible_score += narrative_weight
+        for pattern in profile.get('narrative', []):
+            if pattern in narrative_arc:
+                match_score += narrative_weight
+                break
+
+        # normalize to 0-100 scale
+        if max_possible_score > 0:
+            confidence = (match_score / max_possible_score) * 100
+        else:
+            confidence = 0.0
+
+        genre_matches.append({
+            'genre': genre_name,
+            'confidence': confidence,
+            'description': profile.get('description', '')
+        })
+
+    # sort by confidence
+    genre_matches.sort(key=lambda x: x['confidence'], reverse=True)
+
+    return genre_matches
+
+
+def create_genre_radar_chart(emotion_scores, dyad_scores, genre_profiles_to_compare=None):
+    """
+    create radar chart showing emotion profile compared to genre expectations.
+    """
+    import plotly.graph_objects as go
+
+    # combine emotions and top dyads for visualization
+    categories = ['joy', 'trust', 'fear', 'surprise', 'sadness', 'disgust', 'anger', 'anticipation']
+    values = [emotion_scores.get(cat, 0) for cat in categories]
+
+    # create figure
+    fig = go.Figure()
+
+    # add book's emotion profile
+    fig.add_trace(go.Scatterpolar(
+        r=values,
+        theta=categories,
+        fill='toself',
+        name='this book',
+        line=dict(color='rgb(99, 110, 250)', width=2),
+        fillcolor='rgba(99, 110, 250, 0.3)'
+    ))
+
+    # add genre comparisons if specified
+    if genre_profiles_to_compare:
+        colors = [
+            'rgb(239, 85, 59)',
+            'rgb(0, 204, 150)',
+            'rgb(171, 99, 250)'
+        ]
+        genre_profiles = get_genre_profiles()
+
+        for idx, genre_name in enumerate(genre_profiles_to_compare[:3]):
+            if genre_name in genre_profiles:
+                profile = genre_profiles[genre_name]
+                # use midpoint of ranges for visualization
+                genre_values = []
+                for cat in categories:
+                    if cat in profile.get('emotions', {}):
+                        min_val, max_val = profile['emotions'][cat]
+                        genre_values.append((min_val + max_val) / 2)
+                    else:
+                        genre_values.append(0.1)  # default low value
+
+                fig.add_trace(go.Scatterpolar(
+                    r=genre_values,
+                    theta=categories,
+                    fill='toself',
+                    name=f'typical {genre_name}',
+                    line=dict(color=colors[idx % len(colors)], width=2, dash='dash'),
+                    fillcolor=f'rgba({colors[idx % len(colors)][4:-1]}, 0.1)',
+                    opacity=0.6
+                ))
+
+    fig.update_layout(
+        polar=dict(
+            radialaxis=dict(
+                visible=True,
+                range=[0, max(0.4, max(values) * 1.2)]
+            )
+        ),
+        showlegend=True,
+        title="emotion profile radar chart",
+        height=500
+    )
+
+    return fig
+
+
+def filter_books_by_genre(spark, trajectories_df, target_genre, confidence_threshold=40):
+    """
+    filter books by genre classification.
+    returns dataframe of books matching the target genre.
+    """
+    # convert to pandas for easier processing
+    trajectories_pd = trajectories_df.toPandas()
+
+    # classify genre for each book
+    matching_books = []
+    for idx, row in trajectories_pd.iterrows():
+        # prepare emotion scores
+        emotion_scores = {
+            'joy': row.get('avg_joy', 0),
+            'trust': row.get('avg_trust', 0),
+            'fear': row.get('avg_fear', 0),
+            'surprise': row.get('avg_surprise', 0),
+            'sadness': row.get('avg_sadness', 0),
+            'disgust': row.get('avg_disgust', 0),
+            'anger': row.get('avg_anger', 0),
+            'anticipation': row.get('avg_anticipation', 0),
+        }
+
+        # calculate dyads
+        dyad_scores = calculate_plutchik_dyads(emotion_scores)
+
+        # vad scores
+        vad_scores = {
+            'valence': row.get('avg_valence', 0.5),
+            'arousal': row.get('avg_arousal', 0.5),
+            'dominance': row.get('avg_dominance', 0.5)
+        }
+
+        # simple narrative arc (we don't have chunk data here, so use valence as proxy)
+        narrative_arc = "unknown"
+
+        # classify genre
+        genre_matches = classify_genre_from_emotions(
+            emotion_scores, dyad_scores, vad_scores, narrative_arc
+        )
+
+        # check if target genre matches with sufficient confidence
+        for match in genre_matches:
+            if match['genre'] == target_genre and match['confidence'] >= confidence_threshold:
+                matching_books.append(row)
+                break
+
+    # convert back to spark dataframe
+    if matching_books:
+        import pandas as pd
+        filtered_pd = pd.DataFrame(matching_books)
+        filtered_df = spark.createDataFrame(filtered_pd)
+        return filtered_df
+    else:
+        return None
+
+
 @st.cache_resource
 def get_spark_session():
     """create and cache spark session"""
@@ -884,11 +1167,7 @@ def show_book_analysis_and_recommendations():
                     fig = plot_emotion_trajectory(chunk_scores_pd, title)
                     st.plotly_chart(fig, use_container_width=True)
 
-                    # plutchik's emotion dyads with explanations
-                    st.divider()
-                    st.subheader("plutchik emotion dyads")
-                    st.caption("complex emotions derived from combinations of basic emotions")
-
+                    # prepare emotion data for genre classification and dyads
                     trajectory_pd = trajectory.toPandas().iloc[0]
                     avg_emotions = {
                         'joy': trajectory_pd.get('avg_joy', 0),
@@ -902,6 +1181,77 @@ def show_book_analysis_and_recommendations():
                     }
 
                     dyads = calculate_plutchik_dyads(avg_emotions)
+                    vad_scores = {
+                        'valence': trajectory_pd.get('avg_valence', 0.5),
+                        'arousal': trajectory_pd.get('avg_arousal', 0.5),
+                        'dominance': trajectory_pd.get('avg_dominance', 0.5)
+                    }
+
+                    # genre classification
+                    st.divider()
+                    st.subheader("genre classification")
+                    st.caption("predicted genres based on emotion profile, dyads, vad scores, and narrative arc")
+
+                    # classify genres
+                    genre_matches = classify_genre_from_emotions(
+                        avg_emotions, dyads, vad_scores, narrative_arc
+                    )
+
+                    # display top 5 genre matches
+                    st.write("top genre matches:")
+                    for i, match in enumerate(genre_matches[:5]):
+                        st.markdown(
+                            f"{i+1}. **{match['genre'].title()}** - {match['confidence']:.1f}% confidence"
+                        )
+                        st.caption(f"   {match['description']}")
+
+                    # store top genre for recommendations
+                    st.session_state.top_genre = genre_matches[0]['genre'] if genre_matches else None
+
+                    # genre radar chart (emotion fingerprint)
+                    st.divider()
+                    st.subheader("emotion profile fingerprint")
+                    st.caption("radar chart comparing this book's emotion profile to typical genre patterns")
+
+                    # get top 3 genres for comparison
+                    top_genres = [match['genre'] for match in genre_matches[:3]]
+                    radar_fig = create_genre_radar_chart(avg_emotions, dyads, genre_profiles_to_compare=top_genres)
+                    st.plotly_chart(radar_fig, use_container_width=True)
+
+                    # genre comparison details
+                    with st.expander("detailed genre comparison"):
+                        st.write("how this book compares to typical genre characteristics:")
+                        genre_profiles = get_genre_profiles()
+
+                        for match in genre_matches[:3]:
+                            genre_name = match['genre']
+                            profile = genre_profiles[genre_name]
+
+                            st.markdown(f"### {genre_name.title()} ({match['confidence']:.1f}% match)")
+
+                            # emotion comparison
+                            st.write("**emotion alignment:**")
+                            for emotion, (min_val, max_val) in profile.get('emotions', {}).items():
+                                book_val = avg_emotions.get(emotion, 0)
+                                if min_val <= book_val <= max_val:
+                                    st.write(f"✓ {emotion}: {book_val:.3f} (expected: {min_val:.2f}-{max_val:.2f})")
+                                elif book_val < min_val:
+                                    st.write(f"↓ {emotion}: {book_val:.3f} (below typical {min_val:.2f}-{max_val:.2f})")
+                                else:
+                                    st.write(f"↑ {emotion}: {book_val:.3f} (above typical {min_val:.2f}-{max_val:.2f})")
+
+                            # dyad comparison
+                            st.write("**dyad alignment:**")
+                            for dyad, (min_val, max_val) in profile.get('dyads', {}).items():
+                                book_dyad = dyads.get(dyad, 0)
+                                if min_val <= book_dyad <= max_val:
+                                    st.write(f"✓ {dyad}: {book_dyad:.3f} (expected: {min_val:.2f}-{max_val:.2f})")
+                                elif book_dyad < min_val:
+                                    st.write(f"↓ {dyad}: {book_dyad:.3f} (below typical {min_val:.2f}-{max_val:.2f})")
+                                else:
+                                    st.write(f"↑ {dyad}: {book_dyad:.3f} (above typical {min_val:.2f}-{max_val:.2f})")
+
+                            st.write("")  # spacing
 
                     # find top dyads for highlighting
                     sorted_dyads = sorted(dyads.items(), key=lambda x: x[1], reverse=True)
@@ -953,11 +1303,43 @@ def show_book_analysis_and_recommendations():
                         st.divider()
                         st.subheader("recommendations")
 
+                        # genre filter option
+                        col1, col2 = st.columns([3, 1])
+                        with col1:
+                            enable_genre_filter = st.checkbox(
+                                "filter recommendations by genre",
+                                value=False,
+                                help="only show books matching the top predicted genre"
+                            )
+                        with col2:
+                            if enable_genre_filter and st.session_state.get('top_genre'):
+                                st.info(f"filtering by: {st.session_state.top_genre}")
+
                         with st.spinner("computing recommendations..."):
                             # load trajectories for comparison
                             trajectories = load_trajectories_with_types(
                                 spark, trajectories_path
                             )
+
+                            # apply genre filter if enabled
+                            if enable_genre_filter and st.session_state.get('top_genre'):
+                                st.write(f"filtering books by genre: **{st.session_state.top_genre}**")
+                                with st.spinner(f"finding {st.session_state.top_genre} books..."):
+                                    genre_filtered = filter_books_by_genre(
+                                        spark,
+                                        trajectories,
+                                        st.session_state.top_genre,
+                                        confidence_threshold=40
+                                    )
+
+                                    if genre_filtered and genre_filtered.count() > 0:
+                                        trajectories = genre_filtered
+                                        st.success(f"found {trajectories.count()} {st.session_state.top_genre} books")
+                                    else:
+                                        st.warning(
+                                            f"no books found matching {st.session_state.top_genre} genre. "
+                                            "showing all recommendations instead."
+                                        )
 
                             # count total books available
                             total_books_count = trajectories.count()
