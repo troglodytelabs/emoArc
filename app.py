@@ -26,6 +26,14 @@ from emotion_scorer import (
 )
 from trajectory_analyzer import analyze_trajectory
 from recommender import recommend
+from topic_modeling import (
+    prepare_topic_features,
+    train_lda,
+    get_chunk_topics,
+    compute_book_topics,
+    interpret_book_topics,
+    generate_book_summary,
+)
 
 # page config
 st.set_page_config(
@@ -298,14 +306,72 @@ def get_genre_profiles():
             'dyads': {'submission': (0.10, 0.22), 'disapproval': (0.08, 0.18)},
             'vad': {'valence': (0.45, 0.65), 'arousal': (0.35, 0.55)},
             'narrative': ['steady emotional tone', 'complex narrative structure'],
-            'description': 'contemplative stories exploring ideas and meaning'
+            'description': 'contemplative stories exploring ideas and meaning',
+            'topics': ['religion/spiritual', 'education/knowledge', 'emotion/psychology']
+        },
+        'history': {
+            'emotions': {'anticipation': (0.10, 0.25), 'trust': (0.08, 0.20), 'anger': (0.08, 0.18)},
+            'dyads': {'aggressiveness': (0.08, 0.20), 'submission': (0.08, 0.18)},
+            'vad': {'valence': (0.40, 0.60), 'arousal': (0.45, 0.65)},
+            'narrative': ['tragedy-to-triumph', 'descent', 'complex narrative structure'],
+            'description': 'historical accounts and events from the past',
+            'topics': ['war/military', 'power/politics', 'wealth/society', 'religion/spiritual']
+        },
+        'psychology': {
+            'emotions': {'trust': (0.10, 0.25), 'sadness': (0.08, 0.20), 'fear': (0.08, 0.18)},
+            'dyads': {'submission': (0.08, 0.20), 'remorse': (0.08, 0.18)},
+            'vad': {'valence': (0.40, 0.65), 'arousal': (0.35, 0.60)},
+            'narrative': ['steady emotional tone', 'complex narrative structure'],
+            'description': 'exploration of human mind, behavior, and emotions',
+            'topics': ['emotion/psychology', 'education/knowledge', 'family/domestic']
+        },
+        'biography': {
+            'emotions': {'anticipation': (0.10, 0.25), 'joy': (0.08, 0.22), 'sadness': (0.08, 0.20)},
+            'dyads': {'optimism': (0.10, 0.22), 'disapproval': (0.08, 0.18)},
+            'vad': {'valence': (0.40, 0.65), 'arousal': (0.45, 0.70)},
+            'narrative': ['tragedy-to-triumph', 'triumph-after-trial', 'descent'],
+            'description': 'life stories and personal narratives',
+            'topics': ['power/politics', 'wealth/society', 'family/domestic', 'education/knowledge']
+        },
+        'science': {
+            'emotions': {'anticipation': (0.12, 0.28), 'surprise': (0.10, 0.22), 'trust': (0.08, 0.20)},
+            'dyads': {'optimism': (0.10, 0.25), 'awe': (0.08, 0.20)},
+            'vad': {'valence': (0.45, 0.70), 'arousal': (0.40, 0.65)},
+            'narrative': ['steady emotional tone', 'ascent (comedic arc)'],
+            'description': 'scientific exploration and discovery',
+            'topics': ['education/knowledge', 'nature/rural', 'power/politics']
+        },
+        'travel/exploration': {
+            'emotions': {'anticipation': (0.15, 0.30), 'joy': (0.10, 0.25), 'surprise': (0.10, 0.22)},
+            'dyads': {'optimism': (0.12, 0.28), 'awe': (0.10, 0.22)},
+            'vad': {'valence': (0.50, 0.70), 'arousal': (0.50, 0.75)},
+            'narrative': ['ascent (comedic arc)', 'steady emotional tone'],
+            'description': 'journeys, expeditions, and cultural exploration',
+            'topics': ['adventure/travel', 'nature/rural', 'urban/city', 'maritime/nautical']
+        },
+        'social commentary': {
+            'emotions': {'anger': (0.10, 0.25), 'disgust': (0.08, 0.20), 'sadness': (0.08, 0.20)},
+            'dyads': {'contempt': (0.10, 0.25), 'disapproval': (0.10, 0.22)},
+            'vad': {'valence': (0.30, 0.55), 'arousal': (0.45, 0.70)},
+            'narrative': ['descent', 'complex narrative structure'],
+            'description': 'critique of society, culture, and social issues',
+            'topics': ['wealth/society', 'power/politics', 'urban/city', 'family/domestic']
         }
     }
 
 
-def classify_genre_from_emotions(emotion_scores, dyad_scores, vad_scores, narrative_arc):
+def classify_genre_from_emotions(emotion_scores, dyad_scores, vad_scores, narrative_arc, lda_topics=None):
     """
-    classify book genre based on emotion profile, dyads, vad scores, and narrative arc.
+    classify book genre based on emotion profile, dyads, vad scores, narrative arc, and optional lda topics.
+    hybrid approach: uses plutchik emotions + lda topic themes for comprehensive classification.
+
+    args:
+        emotion_scores: dict of plutchik emotion scores
+        dyad_scores: dict of plutchik dyad scores
+        vad_scores: dict of valence/arousal/dominance scores
+        narrative_arc: detected narrative arc pattern
+        lda_topics: optional list of dominant lda topic themes (from topic modeling)
+
     returns list of matching genres with confidence scores.
     """
     genre_profiles = get_genre_profiles()
@@ -315,8 +381,22 @@ def classify_genre_from_emotions(emotion_scores, dyad_scores, vad_scores, narrat
         match_score = 0.0
         max_possible_score = 0.0
 
-        # check emotion ranges (40% of total weight)
-        emotion_weight = 0.4
+        # if lda topics provided, adjust weights to incorporate content themes
+        # otherwise use emotion-only weighting
+        if lda_topics:
+            emotion_weight = 0.30  # reduced from 0.40
+            dyad_weight = 0.20     # reduced from 0.25
+            vad_weight = 0.20      # reduced from 0.25
+            narrative_weight = 0.10  # same
+            topic_weight = 0.20    # new weight for lda topics
+        else:
+            emotion_weight = 0.40
+            dyad_weight = 0.25
+            vad_weight = 0.25
+            narrative_weight = 0.10
+            topic_weight = 0.0
+
+        # check emotion ranges
         for emotion, (min_val, max_val) in profile.get('emotions', {}).items():
             max_possible_score += emotion_weight / len(profile.get('emotions', {1: 1}))
             emotion_val = emotion_scores.get(emotion, 0)
@@ -355,13 +435,22 @@ def classify_genre_from_emotions(emotion_scores, dyad_scores, vad_scores, narrat
                 # partial credit if close
                 match_score += (vad_weight / len(profile['vad'])) * 0.5
 
-        # check narrative arc (10% of total weight)
-        narrative_weight = 0.10
+        # check narrative arc
         max_possible_score += narrative_weight
         for pattern in profile.get('narrative', []):
             if pattern in narrative_arc:
                 match_score += narrative_weight
                 break
+
+        # check lda topic themes (if provided)
+        if lda_topics and topic_weight > 0:
+            genre_topics = profile.get('topics', [])
+            if genre_topics:
+                max_possible_score += topic_weight
+                # count how many lda topics match genre's expected topics
+                matching_topics = sum(1 for lda_topic in lda_topics if lda_topic in genre_topics)
+                topic_match_ratio = matching_topics / len(genre_topics) if genre_topics else 0
+                match_score += topic_weight * topic_match_ratio
 
         # normalize to 0-100 scale
         if max_possible_score > 0:
@@ -486,9 +575,9 @@ def filter_books_by_genre(spark, trajectories_df, target_genre, confidence_thres
         # simple narrative arc (we don't have chunk data here, so use valence as proxy)
         narrative_arc = "unknown"
 
-        # classify genre
+        # classify genre (without lda topics for bulk filtering - too expensive)
         genre_matches = classify_genre_from_emotions(
-            emotion_scores, dyad_scores, vad_scores, narrative_arc
+            emotion_scores, dyad_scores, vad_scores, narrative_arc, lda_topics=None
         )
 
         # check if target genre matches with sufficient confidence
@@ -667,13 +756,14 @@ def get_input_trajectory(
 ):
     """
     get emotion trajectory for a book or text file
-    returns: (trajectory_df, chunk_scores_df, title, author, full_text)
+    returns: (trajectory_df, chunk_scores_df, title, author, full_text, topic_summary)
     """
     trajectory = None
     chunk_scores = None
     title = None
     author = None
     full_text = None
+    topic_summary = None
 
     # load lexicons
     emotion_df, vad_df = load_lexicons(emotion_lexicon, vad_lexicon)
@@ -708,9 +798,29 @@ def get_input_trajectory(
             chunk_scores = combine_emotion_vad_scores(emotion_scores, vad_scores)
             trajectory = analyze_trajectory(spark, chunk_scores)
 
+            # compute topic modeling summary
+            try:
+                with st.spinner("analyzing themes and topics..."):
+                    feature_df, cv_model = prepare_topic_features(spark, chunks_df, vocab_size=5000, min_df=2)
+                    lda_model = train_lda(spark, feature_df, num_topics=10, max_iter=50)
+                    chunk_topics = get_chunk_topics(spark, feature_df, lda_model)
+                    book_topics_df = compute_book_topics(spark, chunk_topics)
+                    book_topics_list = book_topics_df.select("book_topics").first()["book_topics"]
+
+                    if book_topics_list:
+                        topic_interpretation = interpret_book_topics(book_topics_list, lda_model, cv_model)
+                        topic_summary = {
+                            "summary": generate_book_summary(topic_interpretation),
+                            "dominant_themes": topic_interpretation.get("dominant_themes", []),
+                            "all_topics": topic_interpretation.get("all_topics", [])
+                        }
+            except Exception as topic_error:
+                st.warning(f"could not generate topic summary: {topic_error}")
+                topic_summary = None
+
         except Exception as e:
             st.error(f"error processing text file: {e}")
-            return None, None, None, None, None
+            return None, None, None, None, None, None
 
     # case 2: book id input
     elif book_id:
@@ -823,11 +933,31 @@ def get_input_trajectory(
             chunk_scores = combine_emotion_vad_scores(emotion_scores, vad_scores)
             trajectory = analyze_trajectory(spark, chunk_scores)
 
+            # compute topic modeling summary
+            try:
+                with st.spinner("analyzing themes and topics..."):
+                    feature_df, cv_model = prepare_topic_features(spark, chunks_df, vocab_size=5000, min_df=2)
+                    lda_model = train_lda(spark, feature_df, num_topics=10, max_iter=50)
+                    chunk_topics = get_chunk_topics(spark, feature_df, lda_model)
+                    book_topics_df = compute_book_topics(spark, chunk_topics)
+                    book_topics_list = book_topics_df.select("book_topics").first()["book_topics"]
+
+                    if book_topics_list:
+                        topic_interpretation = interpret_book_topics(book_topics_list, lda_model, cv_model)
+                        topic_summary = {
+                            "summary": generate_book_summary(topic_interpretation),
+                            "dominant_themes": topic_interpretation.get("dominant_themes", []),
+                            "all_topics": topic_interpretation.get("all_topics", [])
+                        }
+            except Exception as topic_error:
+                st.warning(f"could not generate topic summary: {topic_error}")
+                topic_summary = None
+
     else:
         st.error("no input specified")
-        return None, None, None, None, None
+        return None, None, None, None, None, None
 
-    return trajectory, chunk_scores, title, author, full_text
+    return trajectory, chunk_scores, title, author, full_text, topic_summary
 
 
 def plot_emotion_trajectory(chunk_scores_pd, book_title):
@@ -1106,7 +1236,7 @@ def show_book_analysis_and_recommendations():
         if book_id or text_file:
             with st.spinner("processing book (this may take a minute)..."):
                 spark = st.session_state.spark
-                trajectory, chunk_scores, title, author, full_text = get_input_trajectory(
+                trajectory, chunk_scores, title, author, full_text, topic_summary = get_input_trajectory(
                     spark, book_id=book_id, text_file=text_file, output_dir=output_dir
                 )
 
@@ -1147,6 +1277,35 @@ def show_book_analysis_and_recommendations():
                             st.pyplot(wordcloud_fig)
                         except Exception as e:
                             st.warning(f"could not generate word cloud: {e}")
+
+                    # topic modeling summary
+                    if topic_summary:
+                        st.divider()
+                        st.subheader("thematic content analysis (lda topics)")
+                        st.caption("discovered themes from text content using topic modeling")
+
+                        # display summary
+                        st.info(f"**summary:** {topic_summary['summary']}")
+
+                        # display dominant themes
+                        if topic_summary.get('dominant_themes'):
+                            st.write("**dominant themes (>10% probability):**")
+                            for theme in topic_summary['dominant_themes']:
+                                st.markdown(
+                                    f"- **{theme['theme']}** ({theme['probability']*100:.1f}%)"
+                                )
+                                st.caption(f"  top words: {', '.join(theme['top_words'][:8])}")
+
+                        # expandable section for all topics
+                        with st.expander("view all discovered topics"):
+                            st.write("all topics detected in this book:")
+                            for topic in topic_summary.get('all_topics', [])[:10]:
+                                st.markdown(
+                                    f"**topic {topic['topic_id']}: {topic['theme']}** "
+                                    f"({topic['probability']*100:.1f}%)"
+                                )
+                                st.caption(f"keywords: {', '.join(topic['top_words'])}")
+                                st.write("")  # spacing
 
                     # narrative arc detection
                     st.divider()
@@ -1190,11 +1349,16 @@ def show_book_analysis_and_recommendations():
                     # genre classification
                     st.divider()
                     st.subheader("genre classification")
-                    st.caption("predicted genres based on emotion profile, dyads, vad scores, and narrative arc")
+                    st.caption("hybrid classification using plutchik emotions + lda topic themes")
 
-                    # classify genres
+                    # extract lda topic themes if available
+                    lda_topic_themes = None
+                    if topic_summary and topic_summary.get('dominant_themes'):
+                        lda_topic_themes = [theme['theme'] for theme in topic_summary['dominant_themes']]
+
+                    # classify genres (with optional lda topics for non-fiction genres)
                     genre_matches = classify_genre_from_emotions(
-                        avg_emotions, dyads, vad_scores, narrative_arc
+                        avg_emotions, dyads, vad_scores, narrative_arc, lda_topics=lda_topic_themes
                     )
 
                     # display top 5 genre matches
