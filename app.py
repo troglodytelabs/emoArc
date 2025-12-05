@@ -536,6 +536,19 @@ def show_book_analysis_and_recommendations():
         st.info(
             "💡 Tip: Run `python main.py` first to generate trajectories for recommendations."
         )
+    else:
+        # Show how many books are available for comparison
+        try:
+            spark = st.session_state.spark
+            trajectories = load_trajectories_with_types(spark, trajectories_path)
+            total_books = trajectories.count()
+            st.info(
+                f"📚 **{total_books}** books available in trajectory database for recommendations. "
+                f"(Recommendations will compare against these {total_books} books)"
+            )
+        except Exception:
+            # If we can't load trajectories, just show basic info
+            st.info("💡 Trajectories found. Recommendations will compare against books in the trajectory database.")
 
     # Input method selection
     input_method = st.radio(
@@ -724,9 +737,28 @@ def show_book_analysis_and_recommendations():
                             trajectories = load_trajectories_with_types(
                                 spark, trajectories_path
                             )
-
+                            
+                            # Count total books available for comparison
+                            total_books_count = trajectories.count()
+                            
                             # Get liked book ID
                             liked_id = trajectory.select("book_id").first()["book_id"]
+                            
+                            # Check if the current book is already in the trajectories
+                            current_book_in_trajectories = trajectories.filter(
+                                col("book_id") == liked_id
+                            ).count() > 0
+                            
+                            # Display comparison info
+                            if current_book_in_trajectories:
+                                st.info(
+                                    f"📊 Comparing against **{total_books_count}** books from the trajectory database. "
+                                    f"(Note: The current book is included in this database)"
+                                )
+                            else:
+                                st.info(
+                                    f"📊 Comparing against **{total_books_count}** books from the trajectory database."
+                                )
 
                             # Combine trajectories
                             try:
