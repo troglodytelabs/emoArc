@@ -270,12 +270,8 @@ def get_input_trajectory(
                 [("text_file", title, author, text)], schema
             )
 
-            text_len = len(text)
-            chunk_size = 10000
-            if text_len < 20000:
-                chunk_size = max(100, text_len // 10)
-
-            chunks_df = create_chunks_df(spark, books_df, chunk_size=chunk_size)
+            # use percentage-based chunking for comparable trajectories
+            chunks_df = create_chunks_df(spark, books_df, num_chunks=20)
             emotion_scores = score_chunks_with_emotions(spark, chunks_df, emotion_df)
             vad_scores = score_chunks_with_vad(spark, chunks_df, vad_df)
             chunk_scores = combine_emotion_vad_scores(emotion_scores, vad_scores)
@@ -389,12 +385,8 @@ def get_input_trajectory(
                 [(book_id, title, author, book_text)], schema
             )
 
-            text_len = len(book_text)
-            chunk_size = 10000
-            if text_len < 20000:
-                chunk_size = max(100, text_len // 10)
-
-            chunks_df = create_chunks_df(spark, books_df, chunk_size=chunk_size)
+            # use percentage-based chunking for comparable trajectories
+            chunks_df = create_chunks_df(spark, books_df, num_chunks=20)
             emotion_scores = score_chunks_with_emotions(spark, chunks_df, emotion_df)
             vad_scores = score_chunks_with_vad(spark, chunks_df, vad_df)
             chunk_scores = combine_emotion_vad_scores(emotion_scores, vad_scores)
@@ -537,8 +529,8 @@ def plot_emotion_trajectory(chunk_scores_pd, book_title):
         )
 
     # update axes labels
-    fig.update_xaxes(title_text="chunk index", row=1, col=1)
-    fig.update_xaxes(title_text="chunk index", row=2, col=1)
+    fig.update_xaxes(title_text="story progression (chunk index)", row=1, col=1)
+    fig.update_xaxes(title_text="story progression (chunk index)", row=2, col=1)
     fig.update_yaxes(title_text="emotion score", row=1, col=1)
     fig.update_yaxes(title_text="vad score", row=2, col=1)
 
@@ -710,8 +702,10 @@ def show_book_analysis_and_recommendations():
                             st.write(f"book id: {book_id}")
                     with col2:
                         chunk_scores_pd = chunk_scores.orderBy("chunk_index").toPandas()
-                        st.write(f"chunks analyzed: {len(chunk_scores_pd)}")
-                        st.write(f"text length: ~{len(chunk_scores_pd) * 10000} characters")
+                        st.write(f"chunks analyzed: {len(chunk_scores_pd)} (percentage-based)")
+                        if len(chunk_scores_pd) > 0:
+                            est_text_len = len(chunk_scores_pd) * (len(full_text) // len(chunk_scores_pd)) if full_text else 0
+                            st.write(f"estimated text length: ~{est_text_len:,} characters")
 
                     # wordcloud visualization
                     if full_text:
@@ -966,11 +960,12 @@ def show_about():
     - interactive plots showing emotion trajectories over time
 
     how it works:
-    1. books are segmented into fixed-length chunks (10,000 characters)
+    1. books are segmented into 20 equal chunks (percentage-based chunking for trajectory comparability)
     2. each chunk is scored using nrc emotion and vad lexicons
-    3. emotion trajectories are analyzed to identify patterns
+    3. emotion trajectories are analyzed to identify patterns across the story arc
     4. plutchik's dyads combine basic emotions to reveal complex emotional tones
-    5. similar books are found using feature-based similarity
+    5. lda topic modeling discovers thematic content from word distributions
+    6. similar books are found using multi-signal similarity (emotions, topics, embeddings, trajectories)
 
     technical details:
     - built with apache spark for big data processing

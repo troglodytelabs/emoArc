@@ -66,7 +66,13 @@ def main():
         help="Path to NRC VAD Lexicon",
     )
     parser.add_argument(
-        "--chunk-size", type=int, default=10000, help="Chunk size in characters"
+        "--chunk-size", type=int, default=10000, help="Chunk size in characters (ignored if --num-chunks is set)"
+    )
+    parser.add_argument(
+        "--num-chunks",
+        type=int,
+        default=20,
+        help="Number of chunks per book for percentage-based chunking (default: 20). Set to 0 to use --chunk-size instead"
     )
     parser.add_argument(
         "--limit",
@@ -131,7 +137,13 @@ def main():
 
         # Step 3: Create chunks
         print("\n[Step 3/8] Creating text chunks...")
-        chunks_df = create_chunks_df(spark, books_df, chunk_size=args.chunk_size)
+        # use percentage-based chunking if num_chunks > 0, otherwise use fixed size
+        if args.num_chunks > 0:
+            print(f"  Using percentage-based chunking: {args.num_chunks} chunks per book")
+            chunks_df = create_chunks_df(spark, books_df, num_chunks=args.num_chunks)
+        else:
+            print(f"  Using fixed-size chunking: {args.chunk_size} characters per chunk")
+            chunks_df = create_chunks_df(spark, books_df, chunk_size=args.chunk_size)
         print(f"  ✓ Created chunks (total rows: {chunks_df.count()})")
 
         # Step 4: Score chunks with emotions

@@ -154,16 +154,16 @@ def compute_book_topics(spark: SparkSession, chunk_topics_df):
 
 def compute_topic_similarity(topics1, topics2):
     """
-    Compute cosine similarity between two topic distributions.
+    compute cosine similarity between two topic distributions
 
-    Args:
-        topics1: First topic distribution (list)
-        topics2: Second topic distribution (list)
+    args:
+        topics1: first topic distribution (list)
+        topics2: second topic distribution (list)
 
-    Returns:
-        Cosine similarity score (0-1)
+    returns:
+        cosine similarity score (0-1)
     """
-    import numpy as np  # Import inside function for UDF compatibility
+    import numpy as np  # import inside function for udf compatibility
 
     if not topics1 or not topics2:
         return 0.0
@@ -172,12 +172,12 @@ def compute_topic_similarity(topics1, topics2):
         vec1 = np.array(topics1)
         vec2 = np.array(topics2)
 
-        # Ensure same length
+        # ensure same length
         min_len = min(len(vec1), len(vec2))
         vec1 = vec1[:min_len]
         vec2 = vec2[:min_len]
 
-        # Compute cosine similarity
+        # compute cosine similarity
         dot_product = np.dot(vec1, vec2)
         norm1 = np.linalg.norm(vec1)
         norm2 = np.linalg.norm(vec2)
@@ -186,8 +186,145 @@ def compute_topic_similarity(topics1, topics2):
             return 0.0
 
         similarity = dot_product / (norm1 * norm2)
-        # Topic distributions are probabilities, so similarity is already 0-1
+        # topic distributions are probabilities, so similarity is already 0-1
         return float(similarity)
     except Exception:
         return 0.0
+
+
+def interpret_book_topics(book_topics, lda_model, cv_model, top_words_per_topic=5):
+    """
+    interpret book's topic distribution with human-readable topic summaries
+
+    args:
+        book_topics: list of topic probabilities for a book
+        lda_model: trained lda model
+        cv_model: count vectorizer model (for vocabulary)
+        top_words_per_topic: number of top words to extract per topic
+
+    returns:
+        dict with topic interpretations and dominant themes
+    """
+    if not book_topics or len(book_topics) == 0:
+        return {"dominant_themes": [], "all_topics": []}
+
+    # get vocabulary from count vectorizer
+    vocab = cv_model.vocabulary
+
+    # get topic-word distributions from lda model
+    topics_matrix = lda_model.topicsMatrix()
+
+    # interpret each topic
+    all_topics = []
+    for topic_idx in range(len(book_topics)):
+        topic_prob = book_topics[topic_idx]
+
+        # get top words for this topic
+        topic_words_weights = []
+        for word_idx in range(len(vocab)):
+            weight = topics_matrix[word_idx][topic_idx]
+            word = vocab[word_idx]
+            topic_words_weights.append((word, weight))
+
+        # sort by weight and get top words
+        topic_words_weights.sort(key=lambda x: x[1], reverse=True)
+        top_words = [word for word, _ in topic_words_weights[:top_words_per_topic]]
+
+        all_topics.append({
+            "topic_id": topic_idx,
+            "probability": float(topic_prob),
+            "top_words": top_words,
+            "theme": infer_theme_from_words(top_words)
+        })
+
+    # sort topics by probability
+    all_topics.sort(key=lambda x: x["probability"], reverse=True)
+
+    # get dominant themes (>10% probability)
+    dominant_themes = [
+        t for t in all_topics if t["probability"] > 0.10
+    ]
+
+    return {
+        "dominant_themes": dominant_themes,
+        "all_topics": all_topics
+    }
+
+
+def infer_theme_from_words(words):
+    """
+    infer thematic label from top words using keyword matching
+
+    args:
+        words: list of top words for a topic
+
+    returns:
+        thematic label string
+    """
+    words_str = " ".join(words).lower()
+
+    # define theme patterns
+    themes = {
+        "romance/love": ["love", "heart", "kiss", "romance", "marry", "wedding", "passion", "desire"],
+        "war/military": ["war", "battle", "soldier", "army", "fight", "weapon", "enemy", "fought"],
+        "mystery/crime": ["murder", "detective", "clue", "suspect", "crime", "investigate", "mystery"],
+        "adventure/travel": ["journey", "travel", "adventure", "explore", "voyage", "quest", "road"],
+        "maritime/nautical": ["ship", "sea", "captain", "voyage", "sail", "ocean", "boat", "naval"],
+        "fantasy/magic": ["magic", "wizard", "spell", "dragon", "enchant", "mystical", "sorcerer"],
+        "family/domestic": ["family", "home", "mother", "father", "child", "house", "domestic"],
+        "nature/rural": ["nature", "forest", "tree", "rural", "farm", "country", "land", "field"],
+        "urban/city": ["city", "street", "town", "urban", "building", "crowd", "busy"],
+        "religion/spiritual": ["god", "church", "pray", "faith", "divine", "spirit", "holy", "soul"],
+        "wealth/society": ["money", "rich", "poor", "society", "class", "wealth", "fortune"],
+        "education/knowledge": ["learn", "study", "school", "teach", "knowledge", "book", "read"],
+        "emotion/psychology": ["feel", "emotion", "thought", "mind", "heart", "soul", "sense"],
+        "power/politics": ["king", "queen", "power", "rule", "govern", "empire", "throne", "royal"]
+    }
+
+    # count matches for each theme
+    theme_scores = {}
+    for theme, keywords in themes.items():
+        score = sum(1 for keyword in keywords if keyword in words_str)
+        if score > 0:
+            theme_scores[theme] = score
+
+    # return best matching theme or generic label
+    if theme_scores:
+        best_theme = max(theme_scores.items(), key=lambda x: x[1])[0]
+        return best_theme
+    else:
+        # create generic label from top 3 words
+        return " / ".join(words[:3])
+
+
+def generate_book_summary(book_topics_interpretation):
+    """
+    generate human-readable summary from book's topic interpretation
+
+    args:
+        book_topics_interpretation: dict from interpret_book_topics()
+
+    returns:
+        string summary of book's themes
+    """
+    dominant = book_topics_interpretation.get("dominant_themes", [])
+
+    if not dominant:
+        return "themes unclear - insufficient topic data"
+
+    if len(dominant) == 1:
+        theme = dominant[0]
+        return f"primarily {theme['theme']} ({theme['probability']*100:.0f}%)"
+
+    elif len(dominant) == 2:
+        t1, t2 = dominant[0], dominant[1]
+        return f"{t1['theme']} ({t1['probability']*100:.0f}%) and {t2['theme']} ({t2['probability']*100:.0f}%)"
+
+    else:
+        # 3+ dominant themes
+        themes_str = ", ".join([
+            f"{t['theme']} ({t['probability']*100:.0f}%)"
+            for t in dominant[:3]
+        ])
+        return f"mixed themes: {themes_str}"
 

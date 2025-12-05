@@ -106,49 +106,88 @@ def load_books(
 # UDFs are now defined inside create_chunks_df to avoid module serialization issues
 
 
-def create_chunks_df(spark: SparkSession, books_df, chunk_size: int = 10000):
+def create_chunks_df(spark: SparkSession, books_df, chunk_size: int = 10000, num_chunks: int = None):
     """
-    Create chunks from books DataFrame.
+    create chunks from books dataframe.
+    supports two chunking strategies:
+    - fixed size: chunk_size characters per chunk (default 10000)
+    - percentage: num_chunks chunks per book (e.g., 20 for comparable trajectories)
 
-    Args:
-        spark: SparkSession
-        books_df: DataFrame with columns: book_id, title, author, text
-        chunk_size: Size of each chunk in characters
+    args:
+        spark: sparksession
+        books_df: dataframe with columns: book_id, title, author, text
+        chunk_size: size of each chunk in characters (used if num_chunks is none)
+        num_chunks: number of chunks per book (overrides chunk_size if set)
 
-    Returns:
-        DataFrame with columns: book_id, title, author, chunk_index, chunk_text, word
+    returns:
+        dataframe with columns: book_id, title, author, chunk_index, chunk_text, word
     """
 
-    # Define chunk creation function with chunk_size captured in closure
-    # This must be self-contained for Spark serialization
-    def make_chunk_udf(size):
-        """Factory function to create chunk UDF with captured chunk_size."""
+    # define chunk creation function based on strategy
+    if num_chunks is not None:
+        # percentage-based chunking: same number of chunks for all books
+        def make_chunk_udf():
+            """factory function for percentage-based chunking"""
 
-        def _create_chunks_wrapper(text):
-            """Wrapper function for UDF that creates chunks."""
-            if not text:
-                return []
-            chunks = []
-            for i in range(0, len(text), size):
-                chunks.append(
-                    {"chunk_index": i // size, "chunk_text": text[i : i + size]}
-                )
-            return chunks
+            def _create_chunks_wrapper(text):
+                """create fixed number of chunks per book"""
+                if not text:
+                    return []
 
-        return udf(
-            _create_chunks_wrapper,
-            ArrayType(
-                StructType(
-                    [
-                        StructField("chunk_index", IntegerType(), True),
-                        StructField("chunk_text", StringType(), True),
-                    ]
-                )
-            ),
-        )
+                text_len = len(text)
+                # calculate chunk size for this book
+                size = max(100, text_len // num_chunks)  # minimum 100 chars per chunk
 
-    # Create UDF with chunk_size
-    chunk_udf = make_chunk_udf(chunk_size)
+                chunks = []
+                for i in range(0, text_len, size):
+                    chunk_text = text[i : i + size]
+                    if chunk_text:  # only add non-empty chunks
+                        chunks.append(
+                            {"chunk_index": len(chunks), "chunk_text": chunk_text}
+                        )
+                return chunks
+
+            return udf(
+                _create_chunks_wrapper,
+                ArrayType(
+                    StructType(
+                        [
+                            StructField("chunk_index", IntegerType(), True),
+                            StructField("chunk_text", StringType(), True),
+                        ]
+                    )
+                ),
+            )
+    else:
+        # fixed-size chunking: same character count per chunk
+        def make_chunk_udf():
+            """factory function for fixed-size chunking"""
+
+            def _create_chunks_wrapper(text):
+                """create chunks of fixed character size"""
+                if not text:
+                    return []
+                chunks = []
+                for i in range(0, len(text), chunk_size):
+                    chunks.append(
+                        {"chunk_index": i // chunk_size, "chunk_text": text[i : i + chunk_size]}
+                    )
+                return chunks
+
+            return udf(
+                _create_chunks_wrapper,
+                ArrayType(
+                    StructType(
+                        [
+                            StructField("chunk_index", IntegerType(), True),
+                            StructField("chunk_text", StringType(), True),
+                        ]
+                    )
+                ),
+            )
+
+    # create udf
+    chunk_udf = make_chunk_udf()
 
     # Define preprocessing function - completely self-contained, defined inside this function
     def _preprocess_wrapper(text):
