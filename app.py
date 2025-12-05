@@ -76,6 +76,154 @@ def calculate_plutchik_dyads(emotion_scores):
     return dyads
 
 
+def get_dyad_explanation(dyad_name, score):
+    """get human-readable explanation for a dyad score"""
+    explanations = {
+        'love': {
+            'components': 'joy + trust',
+            'meaning': 'warmth, affection, connection',
+            'high': 'strong themes of love, friendship, or loyalty',
+            'low': 'absence of romantic or affectionate elements'
+        },
+        'submission': {
+            'components': 'trust + fear',
+            'meaning': 'respect for authority, compliance',
+            'high': 'themes of hierarchy, obedience, or reverence',
+            'low': 'independence or defiance of authority'
+        },
+        'awe': {
+            'components': 'fear + surprise',
+            'meaning': 'wonder mixed with apprehension',
+            'high': 'mysterious, supernatural, or overwhelming experiences',
+            'low': 'mundane or familiar situations'
+        },
+        'disapproval': {
+            'components': 'surprise + sadness',
+            'meaning': 'disappointment, letdown',
+            'high': 'unexpected negative outcomes or betrayals',
+            'low': 'predictable or satisfying events'
+        },
+        'remorse': {
+            'components': 'sadness + disgust',
+            'meaning': 'guilt, regret, self-reproach',
+            'high': 'moral conflict or consequences of actions',
+            'low': 'characters without regrets or self-doubt'
+        },
+        'contempt': {
+            'components': 'disgust + anger',
+            'meaning': 'scorn, disdain, hatred',
+            'high': 'intense conflict, villains, or moral judgment',
+            'low': 'neutral or positive interpersonal dynamics'
+        },
+        'aggressiveness': {
+            'components': 'anger + anticipation',
+            'meaning': 'hostility, confrontation',
+            'high': 'action, combat, or interpersonal conflict',
+            'low': 'passive or peaceful narrative'
+        },
+        'optimism': {
+            'components': 'anticipation + joy',
+            'meaning': 'hope, excitement for the future',
+            'high': 'adventure, aspirations, positive outlook',
+            'low': 'pessimistic or dark themes'
+        }
+    }
+
+    info = explanations.get(dyad_name, {})
+    if score > 0.15:
+        intensity = 'high'
+        desc = info.get('high', '')
+    elif score < 0.05:
+        intensity = 'low'
+        desc = info.get('low', '')
+    else:
+        intensity = 'moderate'
+        desc = info.get('meaning', '')
+
+    return {
+        'components': info.get('components', ''),
+        'meaning': info.get('meaning', ''),
+        'intensity': intensity,
+        'description': desc
+    }
+
+
+def detect_narrative_arc(chunk_scores_pd):
+    """detect narrative arc pattern from emotion trajectory"""
+    if len(chunk_scores_pd) < 10:
+        return "insufficient data for arc detection"
+
+    # split into beginning, middle, end
+    third = len(chunk_scores_pd) // 3
+    beginning = chunk_scores_pd.iloc[:third]
+    middle = chunk_scores_pd.iloc[third:2*third]
+    end = chunk_scores_pd.iloc[2*third:]
+
+    # analyze valence trajectory
+    begin_valence = beginning['avg_valence'].mean()
+    middle_valence = middle['avg_valence'].mean()
+    end_valence = end['avg_valence'].mean()
+
+    # analyze arousal (tension)
+    begin_arousal = beginning['avg_arousal'].mean()
+    middle_arousal = middle['avg_arousal'].mean()
+    end_arousal = end['avg_arousal'].mean()
+
+    # detect patterns
+    patterns = []
+
+    # classic narrative arcs
+    if middle_valence < begin_valence and end_valence > middle_valence:
+        patterns.append("tragedy-to-triumph (classic hero's journey)")
+    elif begin_valence > middle_valence and end_valence > begin_valence:
+        patterns.append("triumph-after-trial (overcoming adversity)")
+    elif begin_valence > end_valence:
+        patterns.append("descent (tragic arc)")
+    elif end_valence > begin_valence:
+        patterns.append("ascent (comedic arc)")
+    else:
+        patterns.append("steady emotional tone")
+
+    # tension patterns
+    if middle_arousal > begin_arousal and middle_arousal > end_arousal:
+        patterns.append("rising-falling tension (climax in middle)")
+    elif end_arousal > begin_arousal and end_arousal > middle_arousal:
+        patterns.append("building tension (climax at end)")
+
+    return " | ".join(patterns) if patterns else "complex narrative structure"
+
+
+def analyze_emotional_journey(chunk_scores_pd):
+    """analyze the emotional journey throughout the book"""
+    insights = []
+
+    # dominant emotion
+    emotion_cols = ['anger', 'anticipation', 'disgust', 'fear', 'joy', 'sadness', 'surprise', 'trust']
+    avg_emotions = {col: chunk_scores_pd[col].mean() for col in emotion_cols if col in chunk_scores_pd.columns}
+
+    if avg_emotions:
+        dominant = max(avg_emotions.items(), key=lambda x: x[1])
+        insights.append(f"dominant emotion: {dominant[0]} ({dominant[1]:.3f})")
+
+    # emotional range
+    if 'avg_valence' in chunk_scores_pd.columns:
+        val_range = chunk_scores_pd['avg_valence'].max() - chunk_scores_pd['avg_valence'].min()
+        if val_range > 0.3:
+            insights.append(f"high emotional variability (range: {val_range:.3f})")
+        else:
+            insights.append(f"stable emotional tone (range: {val_range:.3f})")
+
+    # trajectory volatility
+    if 'joy' in chunk_scores_pd.columns:
+        joy_std = chunk_scores_pd['joy'].std()
+        if joy_std > 0.1:
+            insights.append("volatile joy trajectory (dramatic emotional shifts)")
+        else:
+            insights.append("consistent joy levels")
+
+    return insights
+
+
 @st.cache_resource
 def get_spark_session():
     """create and cache spark session"""
@@ -717,13 +865,26 @@ def show_book_analysis_and_recommendations():
                         except Exception as e:
                             st.warning(f"could not generate word cloud: {e}")
 
+                    # narrative arc detection
+                    st.divider()
+                    st.subheader("narrative arc analysis")
+                    narrative_arc = detect_narrative_arc(chunk_scores_pd)
+                    st.info(f"detected pattern: {narrative_arc}")
+
+                    # emotional journey insights
+                    journey_insights = analyze_emotional_journey(chunk_scores_pd)
+                    if journey_insights:
+                        st.write("emotional journey insights:")
+                        for insight in journey_insights:
+                            st.write(f"• {insight}")
+
                     # emotion trajectory plot
                     st.divider()
                     st.subheader("emotion trajectory")
                     fig = plot_emotion_trajectory(chunk_scores_pd, title)
                     st.plotly_chart(fig, use_container_width=True)
 
-                    # plutchik's emotion dyads
+                    # plutchik's emotion dyads with explanations
                     st.divider()
                     st.subheader("plutchik emotion dyads")
                     st.caption("complex emotions derived from combinations of basic emotions")
@@ -742,22 +903,34 @@ def show_book_analysis_and_recommendations():
 
                     dyads = calculate_plutchik_dyads(avg_emotions)
 
-                    # display dyads in columns
-                    col1, col2, col3, col4 = st.columns(4)
-                    dyad_items = list(dyads.items())
+                    # find top dyads for highlighting
+                    sorted_dyads = sorted(dyads.items(), key=lambda x: x[1], reverse=True)
+                    top_3_dyads = [name for name, _ in sorted_dyads[:3]]
 
-                    with col1:
-                        st.metric(dyad_items[0][0], f"{dyad_items[0][1]:.4f}")
-                        st.metric(dyad_items[1][0], f"{dyad_items[1][1]:.4f}")
-                    with col2:
-                        st.metric(dyad_items[2][0], f"{dyad_items[2][1]:.4f}")
-                        st.metric(dyad_items[3][0], f"{dyad_items[3][1]:.4f}")
-                    with col3:
-                        st.metric(dyad_items[4][0], f"{dyad_items[4][1]:.4f}")
-                        st.metric(dyad_items[5][0], f"{dyad_items[5][1]:.4f}")
-                    with col4:
-                        st.metric(dyad_items[6][0], f"{dyad_items[6][1]:.4f}")
-                        st.metric(dyad_items[7][0], f"{dyad_items[7][1]:.4f}")
+                    # display dyads with explanations
+                    col1, col2 = st.columns(2)
+
+                    dyad_items = list(dyads.items())
+                    for i, (dyad_name, dyad_score) in enumerate(dyad_items):
+                        explanation = get_dyad_explanation(dyad_name, dyad_score)
+
+                        # alternate columns
+                        target_col = col1 if i % 2 == 0 else col2
+
+                        with target_col:
+                            # highlight top dyads
+                            if dyad_name in top_3_dyads:
+                                st.metric(
+                                    f"⭐ {dyad_name}",
+                                    f"{dyad_score:.4f}",
+                                    delta=f"{explanation['intensity']} intensity"
+                                )
+                            else:
+                                st.metric(dyad_name, f"{dyad_score:.4f}")
+
+                            # show explanation
+                            st.caption(f"{explanation['components']} → {explanation['description']}")
+                            st.write("")  # spacing
 
                     # basic emotion statistics
                     st.divider()

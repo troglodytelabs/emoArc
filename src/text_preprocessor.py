@@ -135,16 +135,31 @@ def create_chunks_df(spark: SparkSession, books_df, chunk_size: int = 10000, num
                     return []
 
                 text_len = len(text)
-                # calculate chunk size for this book
-                size = max(100, text_len // num_chunks)  # minimum 100 chars per chunk
+                if text_len < num_chunks:
+                    # if text is shorter than desired chunks, create one chunk per character group
+                    size = max(10, text_len // max(1, text_len // 100))
+                    chunks = []
+                    for i in range(0, text_len, size):
+                        chunk_text = text[i : i + size]
+                        if chunk_text and len(chunk_text) > 10:
+                            chunks.append(
+                                {"chunk_index": len(chunks), "chunk_text": chunk_text}
+                            )
+                    return chunks
 
+                # calculate chunk boundaries to ensure exactly num_chunks
                 chunks = []
-                for i in range(0, text_len, size):
-                    chunk_text = text[i : i + size]
-                    if chunk_text:  # only add non-empty chunks
+                for i in range(num_chunks):
+                    # distribute text evenly across num_chunks
+                    start = (i * text_len) // num_chunks
+                    end = ((i + 1) * text_len) // num_chunks
+
+                    chunk_text = text[start:end]
+                    if chunk_text:  # should always be true with this approach
                         chunks.append(
-                            {"chunk_index": len(chunks), "chunk_text": chunk_text}
+                            {"chunk_index": i, "chunk_text": chunk_text}
                         )
+
                 return chunks
 
             return udf(
