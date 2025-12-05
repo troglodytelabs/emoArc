@@ -10,16 +10,18 @@ from pyspark.ml.feature import Word2Vec, Word2VecModel
 import numpy as np
 
 
-def train_word2vec(spark: SparkSession, chunks_df, vector_size: int = 100, min_count: int = 5):
+def train_word2vec(
+    spark: SparkSession, chunks_df, vector_size: int = 100, min_count: int = 5
+):
     """
     Train Word2Vec model on the corpus.
-    
+
     Args:
         spark: SparkSession
         chunks_df: DataFrame with columns: book_id, chunk_index, word
         vector_size: Dimension of word vectors (default: 100)
         min_count: Minimum word count to be included (default: 5)
-    
+
     Returns:
         Trained Word2VecModel
     """
@@ -27,29 +29,31 @@ def train_word2vec(spark: SparkSession, chunks_df, vector_size: int = 100, min_c
     word_sequences = chunks_df.groupBy("book_id", "chunk_index").agg(
         collect_list("word").alias("words")
     )
-    
+
     # Train Word2Vec model
     word2vec = Word2Vec(
         vectorSize=vector_size,
         minCount=min_count,
         inputCol="words",
-        outputCol="word_vectors"
+        outputCol="word_vectors",
     )
-    
+
     model = word2vec.fit(word_sequences)
-    
+
     return model
 
 
-def compute_chunk_embeddings(spark: SparkSession, chunks_df, word2vec_model: Word2VecModel):
+def compute_chunk_embeddings(
+    spark: SparkSession, chunks_df, word2vec_model: Word2VecModel
+):
     """
     Compute average word embeddings for each chunk.
-    
+
     Args:
         spark: SparkSession
         chunks_df: DataFrame with columns: book_id, chunk_index, word
         word2vec_model: Trained Word2VecModel
-    
+
     Returns:
         DataFrame with chunk embeddings (average of word vectors)
     """
@@ -57,36 +61,31 @@ def compute_chunk_embeddings(spark: SparkSession, chunks_df, word2vec_model: Wor
     word_sequences = chunks_df.groupBy("book_id", "chunk_index").agg(
         collect_list("word").alias("words")
     )
-    
+
     # Transform to get word vectors
     chunk_vectors = word2vec_model.transform(word_sequences)
-    
+
     # Extract vector values and compute average
     def average_vector(word_vectors):
         """Compute average of word vectors in a chunk."""
         if not word_vectors or len(word_vectors) == 0:
             return None
-        
+
         # word_vectors is a DenseVector, convert to numpy array
-        if hasattr(word_vectors, 'toArray'):
+        if hasattr(word_vectors, "toArray"):
             return word_vectors.toArray().tolist()
         return None
-    
+
     # Extract vector as array
     vector_to_array_udf = udf(
         lambda v: v.toArray().tolist() if v is not None else None,
-        ArrayType(DoubleType())
+        ArrayType(DoubleType()),
     )
-    
+
     chunk_embeddings = chunk_vectors.withColumn(
-        "embedding_vector",
-        vector_to_array_udf(col("word_vectors"))
-    ).select(
-        "book_id",
-        "chunk_index",
-        "embedding_vector"
-    )
-    
+        "embedding_vector", vector_to_array_udf(col("word_vectors"))
+    ).select("book_id", "chunk_index", "embedding_vector")
+
     return chunk_embeddings
 
 
@@ -139,31 +138,31 @@ def compute_book_embedding(spark: SparkSession, chunk_embeddings_df):
 def compute_embedding_similarity(embedding1, embedding2):
     """
     Compute cosine similarity between two embeddings.
-    
+
     Args:
         embedding1: First embedding vector (list)
         embedding2: Second embedding vector (list)
-    
+
     Returns:
         Cosine similarity score (0-1)
     """
     import numpy as np  # Import inside function for UDF compatibility
-    
+
     if not embedding1 or not embedding2:
         return 0.0
-    
+
     try:
         vec1 = np.array(embedding1)
         vec2 = np.array(embedding2)
-        
+
         # Compute cosine similarity
         dot_product = np.dot(vec1, vec2)
         norm1 = np.linalg.norm(vec1)
         norm2 = np.linalg.norm(vec2)
-        
+
         if norm1 == 0 or norm2 == 0:
             return 0.0
-        
+
         similarity = dot_product / (norm1 * norm2)
         # Normalize to 0-1 range (cosine similarity is -1 to 1, but embeddings are usually positive)
         return float((similarity + 1) / 2.0)

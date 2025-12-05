@@ -112,14 +112,14 @@ def main():
 
     try:
         # Step 1: Load lexicons
-        print("\n[Step 1/6] Loading lexicons...")
+        print("\n[Step 1/8] Loading lexicons...")
         emotion_df = load_emotion_lexicon(spark, args.emotion_lexicon)
         vad_df = load_vad_lexicon(spark, args.vad_lexicon)
         print(f"  ✓ Loaded {emotion_df.count()} emotion word-emotion pairs")
         print(f"  ✓ Loaded {vad_df.count()} VAD terms")
 
         # Step 2: Load books
-        print("\n[Step 2/6] Loading books...")
+        print("\n[Step 2/8] Loading books...")
         books_df = load_books(
             spark,
             args.books_dir,
@@ -130,17 +130,17 @@ def main():
         print(f"  ✓ Loaded {books_df.count()} books")
 
         # Step 3: Create chunks
-        print("\n[Step 3/6] Creating text chunks...")
+        print("\n[Step 3/8] Creating text chunks...")
         chunks_df = create_chunks_df(spark, books_df, chunk_size=args.chunk_size)
         print(f"  ✓ Created chunks (total rows: {chunks_df.count()})")
 
         # Step 4: Score chunks with emotions
-        print("\n[Step 4/6] Scoring chunks with emotions...")
+        print("\n[Step 4/8] Scoring chunks with emotions...")
         emotion_scores = score_chunks_with_emotions(spark, chunks_df, emotion_df)
         print(f"  ✓ Scored {emotion_scores.count()} chunks with emotions")
 
         # Step 5: Score chunks with VAD
-        print("\n[Step 5/6] Scoring chunks with VAD...")
+        print("\n[Step 5/8] Scoring chunks with VAD...")
         vad_scores = score_chunks_with_vad(spark, chunks_df, vad_df)
         print(f"  ✓ Scored {vad_scores.count()} chunks with VAD")
 
@@ -150,7 +150,7 @@ def main():
         # Step 6: Analyze trajectories
         print("\n[Step 6/8] Analyzing emotion trajectories...")
         trajectories = analyze_trajectory(spark, chunk_scores)
-        
+
         # Filter out books with no chunks (shouldn't happen, but safety check)
         trajectories = trajectories.filter(col("num_chunks") > 0)
         trajectory_count = trajectories.count()
@@ -165,14 +165,23 @@ def main():
                 spark, chunks_df, vector_size=args.vector_size, min_count=5
             )
             print("  ✓ Word2Vec model trained")
-            
+
             print("  Computing chunk embeddings...")
-            chunk_embeddings = compute_chunk_embeddings(spark, chunks_df, word2vec_model)
-            print(f"  ✓ Computed embeddings for {chunk_embeddings.count()} chunks")
-            
-            print("  Computing book-level embeddings...")
+            chunk_embeddings = compute_chunk_embeddings(
+                spark, chunks_df, word2vec_model
+            )
+            # Cache to avoid recomputation
+            chunk_embeddings.cache()
+            chunk_count = chunk_embeddings.count()
+            print(f"  ✓ Computed embeddings for {chunk_count} chunks")
+
+            print("  Computing book-level embeddings (memory-efficient aggregation)...")
             book_embeddings = compute_book_embedding(spark, chunk_embeddings)
-            print(f"  ✓ Computed embeddings for {book_embeddings.count()} books")
+            book_count = book_embeddings.count()
+            print(f"  ✓ Computed embeddings for {book_count} books")
+
+            # Unpersist cached data
+            chunk_embeddings.unpersist()
         else:
             print("\n[Step 7/8] Skipping word embeddings (--skip-embeddings)")
 
@@ -184,19 +193,28 @@ def main():
             feature_df, cv_model = prepare_topic_features(
                 spark, chunks_df, vocab_size=5000, min_df=2
             )
+            # Cache feature_df to avoid recomputation
+            feature_df.cache()
             print("  ✓ Features prepared")
-            
+
             print(f"  Training LDA model with {args.num_topics} topics...")
             lda_model = train_lda(spark, feature_df, num_topics=args.num_topics, max_iter=50)
             print("  ✓ LDA model trained")
-            
+
             print("  Computing chunk topics...")
             chunk_topics = get_chunk_topics(spark, feature_df, lda_model)
-            print(f"  ✓ Computed topics for {chunk_topics.count()} chunks")
-            
+            chunk_topics.cache()
+            chunk_topic_count = chunk_topics.count()
+            print(f"  ✓ Computed topics for {chunk_topic_count} chunks")
+
             print("  Computing book-level topics...")
             book_topics = compute_book_topics(spark, chunk_topics)
-            print(f"  ✓ Computed topics for {book_topics.count()} books")
+            topic_count = book_topics.count()
+            print(f"  ✓ Computed topics for {topic_count} books")
+
+            # Unpersist cached data
+            feature_df.unpersist()
+            chunk_topics.unpersist()
         else:
             print("\n[Step 8/8] Skipping topic modeling (--skip-topics)")
 
@@ -204,14 +222,16 @@ def main():
         if book_embeddings is not None:
             trajectories = trajectories.join(book_embeddings, on="book_id", how="left")
             print("  ✓ Joined embeddings with trajectories")
-        
+
         if book_topics is not None:
             trajectories = trajectories.join(book_topics, on="book_id", how="left")
             print("  ✓ Joined topics with trajectories")
-        
+
         if args.limit and trajectory_count < args.limit:
-            print(f"  ⚠ Warning: Expected {args.limit} books but got {trajectory_count}")
-            print(f"  Some books may have had no chunks or processing errors.")
+            print(
+                f"  ⚠ Warning: Expected {args.limit} books but got {trajectory_count}"
+            )
+            print("  Some books may have had no chunks or processing errors.")
 
         # Save results
         print(f"\n[Saving] Writing results to {args.output}/...")
@@ -228,7 +248,7 @@ def main():
             columns_to_drop.append("book_embedding")
         if "book_topics" in trajectories.columns:
             columns_to_drop.append("book_topics")
-        
+
         trajectories_for_csv = trajectories.drop(*columns_to_drop)
         trajectories_for_csv.coalesce(1).write.mode("overwrite").option(
             "header", "true"
