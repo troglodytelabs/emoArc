@@ -75,6 +75,12 @@
                 <div class="text-xs text-gray-500">
                     {% if book.emotional_volatility > 0.15 %}Highly Variable{% elif book.emotional_volatility > 0.10 %}Variable{% else %}Steady{% endif %}
                 </div>
+                <div class="mt-2 pt-2 border-t border-blue-200">
+                    <p class="text-xs text-gray-600">
+                        <strong>📊 Calculation:</strong> Standard deviation of total emotional intensity across all 20 narrative chunks.
+                        Higher values indicate dramatic emotional shifts; lower values suggest a steady emotional tone throughout the story.
+                    </p>
+                </div>
             </div>
         </div>
     </div>
