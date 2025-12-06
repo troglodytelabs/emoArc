@@ -361,20 +361,35 @@ def genre_explorer(request):
 
 
 def recommendations(request, book_id):
-    """Get book recommendations based on emotional similarity."""
+    """get book recommendations based on emotional similarity using euclidean distance."""
     book = get_object_or_404(Book, book_id=book_id)
     all_books = Book.objects.exclude(id=book.id)
     recommendations = []
 
+    # collect all distances to find the range for normalization
+    distances = []
     for other_book in all_books:
         distance = book.get_emotional_distance(other_book)
         if distance is not None:
+            distances.append(distance)
             recommendations.append({
                 'book': other_book,
                 'distance': distance,
-                'similarity': max(0, 100 - (distance * 100)),  # Convert to 0-100 similarity
             })
 
+    # normalize similarity based on actual distance range in the dataset
+    # uses exponential decay: similarity = 100 * e^(-distance/scale)
+    # scale factor ensures median distance maps to ~50% similarity
+    if distances:
+        median_distance = sorted(distances)[len(distances) // 2]
+        scale_factor = median_distance / 0.693  # ln(2) ≈ 0.693, so median → 50%
+
+        for rec in recommendations:
+            # exponential similarity: closer books have exponentially higher similarity
+            # distance=0 → 100%, distance=median → 50%, distance=∞ → 0%
+            rec['similarity'] = 100 * (2.718 ** (-rec['distance'] / scale_factor))
+
+    # sort by distance (closest first) and take top 10
     recommendations.sort(key=lambda x: x['distance'])
     recommendations = recommendations[:10]
 

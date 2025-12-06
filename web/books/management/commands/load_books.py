@@ -71,15 +71,28 @@ class Command(BaseCommand):
                                 value = row.get(f'avg_{vad}', 0.0)
                                 setattr(book, f'avg_{vad}', float(value) if value else 0.0)
 
-                            # Update dyad scores (primary dyads)
-                            for dyad in ['love', 'submission', 'alarm', 'disappointment', 'remorse', 'contempt', 'aggressiveness', 'optimism']:
-                                value = row.get(f'avg_{dyad}', 0.0)
-                                setattr(book, f'avg_{dyad}', float(value) if value else 0.0)
+                            # calculate dyad scores from basic emotions (plutchik's dyads)
+                            # primary dyads (adjacent emotions on wheel)
+                            book.avg_love = (book.avg_joy + book.avg_trust) / 2
+                            book.avg_submission = (book.avg_trust + book.avg_fear) / 2
+                            book.avg_alarm = (book.avg_fear + book.avg_surprise) / 2
+                            book.avg_disappointment = (book.avg_surprise + book.avg_sadness) / 2
+                            book.avg_remorse = (book.avg_sadness + book.avg_disgust) / 2
+                            book.avg_contempt = (book.avg_disgust + book.avg_anger) / 2
+                            book.avg_aggressiveness = (book.avg_anger + book.avg_anticipation) / 2
+                            book.avg_optimism = (book.avg_anticipation + book.avg_joy) / 2
 
-                            # Update secondary dyad scores
-                            for dyad in ['guilt', 'curiosity', 'despair', 'unbelief', 'envy', 'cynicism', 'pride', 'hope', 'anxiety', 'outrage']:
-                                value = row.get(f'avg_{dyad}', 0.0)
-                                setattr(book, f'avg_{dyad}', float(value) if value else 0.0)
+                            # secondary dyads (skip 1 emotion on wheel)
+                            book.avg_guilt = (book.avg_joy + book.avg_fear) / 2
+                            book.avg_curiosity = (book.avg_trust + book.avg_surprise) / 2
+                            book.avg_despair = (book.avg_fear + book.avg_sadness) / 2
+                            book.avg_unbelief = (book.avg_surprise + book.avg_disgust) / 2
+                            book.avg_envy = (book.avg_sadness + book.avg_anger) / 2
+                            book.avg_cynicism = (book.avg_disgust + book.avg_anticipation) / 2
+                            book.avg_pride = (book.avg_anger + book.avg_joy) / 2
+                            book.avg_hope = (book.avg_anticipation + book.avg_trust) / 2
+                            book.avg_anxiety = (book.avg_anticipation + book.avg_fear) / 2
+                            book.avg_outrage = (book.avg_surprise + book.avg_anger) / 2
 
                             # Update narrative arc metrics
                             book.num_chunks = int(row.get('num_chunks', 20))
@@ -87,6 +100,22 @@ class Command(BaseCommand):
                             book.climax_position = float(row.get('climax_position', 0.0)) if row.get('climax_position') else 0.0
                             book.resolution_pct = float(row.get('resolution_pct', 0.0)) if row.get('resolution_pct') else 0.0
                             book.emotional_volatility = float(row.get('emotional_volatility', 0.0)) if row.get('emotional_volatility') else 0.0
+
+                            # load topic modeling results (top 3 topics and probabilities)
+                            # format: [{"topic_id": 3, "probability": 0.32}, {"topic_id": 7, "probability": 0.21}, ...]
+                            topics = []
+                            for i in [1, 2, 3]:
+                                topic_id = row.get(f'top_topic_{i}')
+                                topic_prob = row.get(f'top_topic_{i}_prob')
+                                if topic_id and topic_prob and float(topic_prob) > 0.05:  # only include if >5% probability
+                                    try:
+                                        topics.append({
+                                            'topic_id': int(float(topic_id)),
+                                            'probability': float(topic_prob)
+                                        })
+                                    except (ValueError, TypeError):
+                                        pass
+                            book.dominant_themes = topics
 
                             book.save()
 

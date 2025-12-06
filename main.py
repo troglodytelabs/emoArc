@@ -248,6 +248,46 @@ def main():
             )
             print("  Some books may have had no chunks or processing errors.")
 
+        # flatten topic distributions to CSV-compatible columns
+        if book_topics is not None and "book_topics" in trajectories.columns:
+            print("  Flattening topic distributions for CSV export...")
+            from pyspark.sql.functions import udf
+            from pyspark.sql.types import FloatType, IntegerType
+
+            # extract top 3 topics and their probabilities
+            # topic distributions are arrays like [0.05, 0.32, 0.11, 0.08, 0.24, ...]
+            def get_top_topic_idx(topics, rank=0):
+                """get index of nth highest topic probability"""
+                if not topics or len(topics) == 0:
+                    return -1
+                # sort indices by probability descending
+                sorted_indices = sorted(range(len(topics)), key=lambda i: topics[i], reverse=True)
+                return int(sorted_indices[rank]) if rank < len(sorted_indices) else -1
+
+            def get_top_topic_prob(topics, rank=0):
+                """get nth highest topic probability"""
+                if not topics or len(topics) == 0:
+                    return 0.0
+                sorted_probs = sorted(topics, reverse=True)
+                return float(sorted_probs[rank]) if rank < len(sorted_probs) else 0.0
+
+            # register udfs
+            top_idx_udf = udf(lambda t: get_top_topic_idx(t, 0), IntegerType())
+            top_prob_udf = udf(lambda t: get_top_topic_prob(t, 0), FloatType())
+            second_idx_udf = udf(lambda t: get_top_topic_idx(t, 1), IntegerType())
+            second_prob_udf = udf(lambda t: get_top_topic_prob(t, 1), FloatType())
+            third_idx_udf = udf(lambda t: get_top_topic_idx(t, 2), IntegerType())
+            third_prob_udf = udf(lambda t: get_top_topic_prob(t, 2), FloatType())
+
+            # add flattened topic columns
+            trajectories = trajectories.withColumn("top_topic_1", top_idx_udf(col("book_topics"))) \
+                                     .withColumn("top_topic_1_prob", top_prob_udf(col("book_topics"))) \
+                                     .withColumn("top_topic_2", second_idx_udf(col("book_topics"))) \
+                                     .withColumn("top_topic_2_prob", second_prob_udf(col("book_topics"))) \
+                                     .withColumn("top_topic_3", third_idx_udf(col("book_topics"))) \
+                                     .withColumn("top_topic_3_prob", third_prob_udf(col("book_topics")))
+            print("  ✓ Topic distributions flattened")
+
         # Save results
         print(f"\n[Saving] Writing results to {args.output}/...")
         os.makedirs(args.output, exist_ok=True)
@@ -263,7 +303,7 @@ def main():
         if "book_embedding" in trajectories.columns:
             columns_to_drop.append("book_embedding")
         if "book_topics" in trajectories.columns:
-            columns_to_drop.append("book_topics")
+            columns_to_drop.append("book_topics")  # drop original array, keep flattened columns
         if "text" in trajectories.columns:
             columns_to_drop.append("text")
 
