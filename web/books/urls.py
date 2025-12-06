@@ -9,6 +9,7 @@ app_name = 'books'
 urlpatterns = [
     path('', views.home, name='home'),
     path('methodology/', views.methodology, name='methodology'),
+    path('data/', views.data_browser, name='data_browser'),
     path('book/<str:book_id>/', views.book_detail, name='book_detail'),
     path('compare/', views.compare_books, name='compare'),
     path('genres/', views.genre_explorer, name='genre_explorer'),

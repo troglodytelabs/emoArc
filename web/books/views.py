@@ -6,6 +6,7 @@ from django.db.models import Q, Avg, Max, Min, Count, StdDev
 from django.core.paginator import Paginator
 from django.http import JsonResponse
 from .models import Book
+import plotly
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import json
@@ -383,6 +384,23 @@ def recommendations(request, book_id):
     }
 
     return render(request, 'books/recommendations.html', context)
+
+
+def data_browser(request):
+    """Browse all books data in tabular format."""
+    sort_by = request.GET.get('sort', 'title')
+    books = Book.objects.all().order_by(sort_by)
+
+    paginator = Paginator(books, 50)  # 50 books per page
+    page_obj = paginator.get_page(request.GET.get('page'))
+
+    context = {
+        'page_obj': page_obj,
+        'sort_by': sort_by,
+        'total_books': Book.objects.count(),
+    }
+
+    return render(request, 'books/data_browser.html', context)
 
 
 # ============================================================================
