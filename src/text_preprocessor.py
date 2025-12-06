@@ -275,12 +275,17 @@ def create_chunks_df(spark: SparkSession, books_df, chunk_size: int = 10000, num
     # Preprocess chunks to get words
     chunks_df = chunks_df.withColumn("words", preprocess_udf(col("chunk_text")))
 
+    # CRITICAL: Calculate word count BEFORE exploding to enable normalization
+    from pyspark.sql.functions import size
+    chunks_df = chunks_df.withColumn("chunk_word_count", size(col("words")))
+
     # Explode words - one row per word
     chunks_df = chunks_df.select(
         col("book_id"),
         col("title"),
         col("author"),
         col("chunk_index"),
+        col("chunk_word_count"),  # Preserve word count for normalization
         explode(col("words")).alias("word"),
     )
     # NOTE: chunk_text is intentionally dropped here to prevent OOM errors

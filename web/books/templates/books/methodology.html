@@ -20,11 +20,18 @@
         font-size: 0.9em;
     }
     pre {
-        background: #1f2937;
-        color: #f3f4f6;
+        background: #1e293b;
+        color: #ffffff;
         padding: 1rem;
         border-radius: 0.5rem;
         overflow-x: auto;
+        line-height: 1.6;
+    }
+    pre code {
+        background: transparent;
+        color: #e2e8f0;
+        padding: 0;
+        font-size: 0.95em;
     }
 </style>
 {% endblock %}
@@ -128,22 +135,44 @@ sad     sadness    1
 </code></pre>
         </div>
 
-        <h3 class="text-2xl font-semibold text-gray-900 mb-4">2.2 Emotion Scoring Formula</h3>
+        <h3 class="text-2xl font-semibold text-gray-900 mb-4">2.2 Normalized Density Scoring (CRITICAL)</h3>
+        <div class="bg-gradient-to-r from-yellow-50 to-orange-50 border-2 border-orange-400 rounded-lg p-6 mb-6">
+            <p class="font-bold text-orange-900 mb-3 text-lg">🔥 Why Normalization Matters</p>
+            <p class="text-orange-800 mb-2">
+                Raw emotion word counts are <strong>meaningless for comparison</strong>. "The Complete Works of William Shakespeare"
+                (500k+ words) would have 10x higher raw counts than a 50k-word novel, making comparisons impossible.
+            </p>
+            <p class="text-orange-800">
+                <strong>Solution:</strong> We use <em>density-based scoring</em> — emotion words <strong>per 1000 words</strong> —
+                so books of any length can be fairly compared.
+            </p>
+        </div>
+
         <div class="formula">
-            <p class="mb-4">For each chunk \( c_i \) and emotion \( e \):</p>
+            <p class="mb-4"><strong>Step 1:</strong> Count raw emotion words in chunk \( c_i \):</p>
             <p class="mb-2">\( \text{count}(c_i, e) = \sum_{w \in c_i} \mathbb{1}[\text{Lexicon}(w, e) = 1] \)</p>
             <p class="text-sm text-gray-600 mb-4">
                 where \( \mathbb{1}[\cdot] \) is the indicator function (1 if true, 0 if false)
             </p>
 
-            <p class="mb-4">Book-level emotion score (averaged across all chunks):</p>
-            <p>\( \text{emotion\_score}(e) = \frac{1}{N} \sum_{i=0}^{N-1} \text{count}(c_i, e) \)</p>
+            <p class="mb-4"><strong>Step 2:</strong> Normalize by chunk word count to get density:</p>
+            <p class="mb-2">\( \text{density}(c_i, e) = \frac{\text{count}(c_i, e)}{|c_i|} \times 1000 \)</p>
+            <p class="text-sm text-gray-600 mb-4">
+                where \( |c_i| \) is the total word count in chunk \( i \) (after preprocessing)
+            </p>
+
+            <p class="mb-4"><strong>Step 3:</strong> Book-level score (average density across all chunks):</p>
+            <p>\( \text{emotion\_score}(e) = \frac{1}{N} \sum_{i=0}^{N-1} \text{density}(c_i, e) \)</p>
         </div>
 
-        <div class="bg-yellow-50 border-l-4 border-yellow-400 p-4 mt-4">
-            <p class="text-sm text-yellow-900">
-                <strong>⚠️ Interpretation:</strong> A score of 12.5 for "joy" means on average, each chunk contains
-                12.5 words associated with joy. This is a <em>frequency measure</em>, not intensity.
+        <div class="bg-green-50 border-l-4 border-green-500 p-4 mt-4">
+            <p class="text-sm text-green-900 mb-2">
+                <strong>✓ Interpretation:</strong> A score of 12.5 for "joy" means on average, there are
+                <strong>12.5 joy-associated words per 1000 words</strong> throughout the book.
+            </p>
+            <p class="text-sm text-green-900">
+                This is comparable across all books: a 20k-word novella and a 500k-word collection now have
+                scores on the same scale (both measuring emotional <em>density</em>, not volume).
             </p>
         </div>
 

@@ -387,9 +387,23 @@ def recommendations(request, book_id):
 
 
 def data_browser(request):
-    """Browse all books data in tabular format."""
+    """Browse all books data in tabular format with search functionality."""
     sort_by = request.GET.get('sort', 'title')
-    books = Book.objects.all().order_by(sort_by)
+    search_query = request.GET.get('search', '').strip()
+
+    # Start with all books
+    books = Book.objects.all()
+
+    # Apply search filter if query provided
+    if search_query:
+        books = books.filter(
+            Q(title__icontains=search_query) |
+            Q(author__icontains=search_query) |
+            Q(book_id__icontains=search_query)
+        )
+
+    # Apply sorting
+    books = books.order_by(sort_by)
 
     paginator = Paginator(books, 50)  # 50 books per page
     page_obj = paginator.get_page(request.GET.get('page'))
@@ -397,6 +411,7 @@ def data_browser(request):
     context = {
         'page_obj': page_obj,
         'sort_by': sort_by,
+        'search_query': search_query,
         'total_books': Book.objects.count(),
     }
 
