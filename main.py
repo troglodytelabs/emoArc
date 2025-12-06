@@ -248,11 +248,85 @@ def main():
             )
             print("  Some books may have had no chunks or processing errors.")
 
-        # flatten topic distributions to CSV-compatible columns
+        # calculate emotional volatility from trajectory before dropping it
+        # volatility = standard deviation of total emotional intensity across chunks
+        if "emotion_trajectory" in trajectories.columns:
+            print("  Calculating emotional volatility...")
+            from pyspark.sql.functions import udf, explode
+            from pyspark.sql.types import FloatType, ArrayType, StringType, StructType, StructField
+
+            # udf to calculate volatility from emotion trajectory array
+            def calculate_volatility(trajectory):
+                """
+                calculate emotional volatility as std dev of total intensity across chunks
+                trajectory format: [[chunk_idx, anger, anticipation, disgust, fear, joy, sadness, surprise, trust], ...]
+                """
+                if not trajectory or len(trajectory) == 0:
+                    return 0.0
+                try:
+                    # sum all emotions for each chunk (indices 1-8)
+                    intensities = [sum(chunk[1:9]) for chunk in trajectory]
+                    if len(intensities) < 2:
+                        return 0.0
+                    # calculate standard deviation
+                    mean_intensity = sum(intensities) / len(intensities)
+                    variance = sum((x - mean_intensity) ** 2 for x in intensities) / len(intensities)
+                    return float(variance ** 0.5)
+                except Exception:
+                    return 0.0
+
+            volatility_udf = udf(calculate_volatility, FloatType())
+            trajectories = trajectories.withColumn("emotional_volatility", volatility_udf(col("emotion_trajectory")))
+            print("  ✓ Emotional volatility calculated")
+
+            # convert emotion_trajectory to JSON string for CSV storage
+            # this preserves the data so django can load and display arc charts
+            print("  Converting emotion trajectories to JSON...")
+            def trajectory_to_json(trajectory):
+                """
+                convert trajectory array to json string
+                format: [{"anger": 12.3, "joy": 15.4, ...}, {"anger": 11.2, ...}, ...]
+                """
+                if not trajectory or len(trajectory) == 0:
+                    return "[]"
+                try:
+                    import json
+                    emotion_names = ["anger", "anticipation", "disgust", "fear", "joy", "sadness", "surprise", "trust"]
+                    chunks = []
+                    for chunk_data in trajectory:
+                        # chunk_data = [chunk_idx, anger, anticipation, ..., trust]
+                        chunk_dict = {}
+                        for i, emotion in enumerate(emotion_names):
+                            chunk_dict[emotion] = float(chunk_data[i + 1])  # +1 to skip chunk_idx
+                        chunks.append(chunk_dict)
+                    return json.dumps(chunks)
+                except Exception:
+                    return "[]"
+
+            trajectory_json_udf = udf(trajectory_to_json, StringType())
+            trajectories = trajectories.withColumn("emotion_trajectory_json", trajectory_json_udf(col("emotion_trajectory")))
+            print("  ✓ Emotion trajectories converted to JSON")
+
+        # flatten topic distributions to CSV-compatible columns with interpretable labels
         if book_topics is not None and "book_topics" in trajectories.columns:
             print("  Flattening topic distributions for CSV export...")
             from pyspark.sql.functions import udf
-            from pyspark.sql.types import FloatType, IntegerType
+            from pyspark.sql.types import FloatType, IntegerType, StringType
+
+            # get vocabulary and topic descriptions from models
+            vocabulary = cv_model.vocabulary
+            topics_described = lda_model.describeTopics(maxTermsPerTopic=5).collect()
+
+            # extract topic words for labeling
+            topic_words_map = {}
+            for topic_row in topics_described:
+                topic_id = topic_row['topic']
+                term_indices = topic_row['termIndices']
+                words = [vocabulary[idx] for idx in term_indices[:5]]
+                topic_words_map[topic_id] = words
+
+            # create broadcast variable for efficient access
+            topic_words_broadcast = spark.sparkContext.broadcast(topic_words_map)
 
             # extract top 3 topics and their probabilities
             # topic distributions are arrays like [0.05, 0.32, 0.11, 0.08, 0.24, ...]
@@ -271,22 +345,40 @@ def main():
                 sorted_probs = sorted(topics, reverse=True)
                 return float(sorted_probs[rank]) if rank < len(sorted_probs) else 0.0
 
+            def get_topic_words(topics, rank=0):
+                """get comma-separated top words for nth highest topic"""
+                if not topics or len(topics) == 0:
+                    return ""
+                topic_idx = get_top_topic_idx(topics, rank)
+                if topic_idx < 0:
+                    return ""
+                words = topic_words_broadcast.value.get(topic_idx, [])
+                return ",".join(words[:5])  # top 5 words
+
             # register udfs
             top_idx_udf = udf(lambda t: get_top_topic_idx(t, 0), IntegerType())
             top_prob_udf = udf(lambda t: get_top_topic_prob(t, 0), FloatType())
+            top_words_udf = udf(lambda t: get_topic_words(t, 0), StringType())
+
             second_idx_udf = udf(lambda t: get_top_topic_idx(t, 1), IntegerType())
             second_prob_udf = udf(lambda t: get_top_topic_prob(t, 1), FloatType())
+            second_words_udf = udf(lambda t: get_topic_words(t, 1), StringType())
+
             third_idx_udf = udf(lambda t: get_top_topic_idx(t, 2), IntegerType())
             third_prob_udf = udf(lambda t: get_top_topic_prob(t, 2), FloatType())
+            third_words_udf = udf(lambda t: get_topic_words(t, 2), StringType())
 
-            # add flattened topic columns
+            # add flattened topic columns with words
             trajectories = trajectories.withColumn("top_topic_1", top_idx_udf(col("book_topics"))) \
                                      .withColumn("top_topic_1_prob", top_prob_udf(col("book_topics"))) \
+                                     .withColumn("top_topic_1_words", top_words_udf(col("book_topics"))) \
                                      .withColumn("top_topic_2", second_idx_udf(col("book_topics"))) \
                                      .withColumn("top_topic_2_prob", second_prob_udf(col("book_topics"))) \
+                                     .withColumn("top_topic_2_words", second_words_udf(col("book_topics"))) \
                                      .withColumn("top_topic_3", third_idx_udf(col("book_topics"))) \
-                                     .withColumn("top_topic_3_prob", third_prob_udf(col("book_topics")))
-            print("  ✓ Topic distributions flattened")
+                                     .withColumn("top_topic_3_prob", third_prob_udf(col("book_topics"))) \
+                                     .withColumn("top_topic_3_words", third_words_udf(col("book_topics")))
+            print("  ✓ Topic distributions flattened with interpretable labels")
 
         # Save results
         print(f"\n[Saving] Writing results to {args.output}/...")

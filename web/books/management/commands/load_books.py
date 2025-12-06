@@ -101,21 +101,33 @@ class Command(BaseCommand):
                             book.resolution_pct = float(row.get('resolution_pct', 0.0)) if row.get('resolution_pct') else 0.0
                             book.emotional_volatility = float(row.get('emotional_volatility', 0.0)) if row.get('emotional_volatility') else 0.0
 
-                            # load topic modeling results (top 3 topics and probabilities)
-                            # format: [{"topic_id": 3, "probability": 0.32}, {"topic_id": 7, "probability": 0.21}, ...]
+                            # load topic modeling results (top 3 topics with words and probabilities)
+                            # format: [{"topic_id": 3, "probability": 0.32, "words": ["love", "heart", ...]}, ...]
                             topics = []
                             for i in [1, 2, 3]:
                                 topic_id = row.get(f'top_topic_{i}')
                                 topic_prob = row.get(f'top_topic_{i}_prob')
+                                topic_words = row.get(f'top_topic_{i}_words', '')
                                 if topic_id and topic_prob and float(topic_prob) > 0.05:  # only include if >5% probability
                                     try:
                                         topics.append({
                                             'topic_id': int(float(topic_id)),
-                                            'probability': float(topic_prob)
+                                            'probability': float(topic_prob),
+                                            'words': topic_words.split(',') if topic_words else []
                                         })
                                     except (ValueError, TypeError):
                                         pass
                             book.dominant_themes = topics
+
+                            # load emotion trajectory for arc charts
+                            # stored as JSON string: [{"anger": 12.3, "joy": 15.4, ...}, ...]
+                            trajectory_json = row.get('emotion_trajectory_json', '[]')
+                            if trajectory_json and trajectory_json != '[]':
+                                try:
+                                    import json
+                                    book.emotion_trajectory = json.loads(trajectory_json)
+                                except (json.JSONDecodeError, TypeError):
+                                    book.emotion_trajectory = []
 
                             book.save()
 
