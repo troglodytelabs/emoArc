@@ -120,14 +120,19 @@ class Command(BaseCommand):
                             book.dominant_themes = topics
 
                             # load emotion trajectory for arc charts
-                            # stored as JSON string: [{"anger": 12.3, "joy": 15.4, ...}, ...]
-                            trajectory_json = row.get('emotion_trajectory_json', '[]')
-                            if trajectory_json and trajectory_json != '[]':
+                            # stored as base64-encoded JSON string to avoid CSV parsing issues
+                            trajectory_b64 = row.get('emotion_trajectory_json', '')
+                            if trajectory_b64:
                                 try:
                                     import json
-                                    book.emotion_trajectory = json.loads(trajectory_json)
-                                except (json.JSONDecodeError, TypeError):
+                                    import base64
+                                    # decode base64, then parse JSON
+                                    json_str = base64.b64decode(trajectory_b64.encode('utf-8')).decode('utf-8')
+                                    book.emotion_trajectory = json.loads(json_str)
+                                except (json.JSONDecodeError, TypeError, ValueError):
                                     book.emotion_trajectory = []
+                            else:
+                                book.emotion_trajectory = []
 
                             book.save()
 

@@ -284,13 +284,14 @@ def main():
             print("  Converting emotion trajectories to JSON...")
             def trajectory_to_json(trajectory):
                 """
-                convert trajectory array to json string
-                format: [{"anger": 12.3, "joy": 15.4, ...}, {"anger": 11.2, ...}, ...]
+                convert trajectory array to json string, then base64 encode to avoid csv issues
+                format: base64([{"anger": 12.3, "joy": 15.4, ...}, {"anger": 11.2, ...}, ...])
                 """
                 if not trajectory or len(trajectory) == 0:
-                    return "[]"
+                    return ""
                 try:
                     import json
+                    import base64
                     emotion_names = ["anger", "anticipation", "disgust", "fear", "joy", "sadness", "surprise", "trust"]
                     chunks = []
                     for chunk_data in trajectory:
@@ -299,9 +300,11 @@ def main():
                         for i, emotion in enumerate(emotion_names):
                             chunk_dict[emotion] = float(chunk_data[i + 1])  # +1 to skip chunk_idx
                         chunks.append(chunk_dict)
-                    return json.dumps(chunks)
+                    json_str = json.dumps(chunks)
+                    # base64 encode to avoid CSV quoting/escaping issues
+                    return base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
                 except Exception:
-                    return "[]"
+                    return ""
 
             trajectory_json_udf = udf(trajectory_to_json, StringType())
             trajectories = trajectories.withColumn("emotion_trajectory_json", trajectory_json_udf(col("emotion_trajectory")))
