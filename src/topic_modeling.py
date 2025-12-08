@@ -26,16 +26,65 @@ def prepare_topic_features(
     Returns:
         Tuple of (feature_df, count_vectorizer_model)
     """
+    # comprehensive english stop words list for better topic quality
+    stop_words = [
+        "a", "about", "above", "after", "again", "against", "all", "am", "an", "and", "any", "are",
+        "as", "at", "be", "because", "been", "before", "being", "below", "between", "both", "but",
+        "by", "can", "cannot", "could", "did", "do", "does", "doing", "down", "during", "each",
+        "few", "for", "from", "further", "had", "has", "have", "having", "he", "her", "here",
+        "hers", "herself", "him", "himself", "his", "how", "i", "if", "in", "into", "is", "it",
+        "its", "itself", "just", "me", "might", "more", "most", "must", "my", "myself", "no",
+        "nor", "not", "now", "of", "off", "on", "once", "only", "or", "other", "ought", "our",
+        "ours", "ourselves", "out", "over", "own", "said", "same", "she", "should", "so", "some",
+        "such", "than", "that", "the", "their", "theirs", "them", "themselves", "then", "there",
+        "these", "they", "this", "those", "through", "to", "too", "under", "until", "up", "very",
+        "was", "we", "were", "what", "when", "where", "which", "while", "who", "whom", "why",
+        "will", "with", "would", "you", "your", "yours", "yourself", "yourselves",
+        # common narrative words that don't add semantic value
+        "one", "two", "may", "upon", "also", "well", "much", "many", "make", "made", "get", "got",
+        "go", "went", "come", "came", "take", "took", "see", "saw", "know", "knew", "think",
+        "thought", "tell", "told", "ask", "asked", "give", "gave", "find", "found", "seem",
+        "seemed", "look", "looked", "put", "without", "within", "toward", "however", "therefore",
+        "thus", "hence", "indeed", "moreover", "nevertheless", "otherwise", "yet", "still", "even",
+        "ever", "never", "always", "often", "sometimes", "already", "quite", "rather", "almost",
+        "perhaps", "maybe", "certainly", "surely"
+    ]
+
     # Group words by chunk
     word_sequences = chunks_df.groupBy("book_id", "chunk_index").agg(
         collect_list("word").alias("words")
     )
 
-    # Convert to term frequency vectors
+    # Convert to term frequency vectors with stop word filtering
+    # maxDF filters words that appear in >50% of documents (too common)
     count_vectorizer = CountVectorizer(
-        inputCol="words", outputCol="raw_features", vocabSize=vocab_size, minDF=min_df
+        inputCol="words",
+        outputCol="raw_features",
+        vocabSize=vocab_size,
+        minDF=min_df,
+        maxDF=0.5  # remove words appearing in >50% of chunks
     )
 
+    cv_model = count_vectorizer.fit(word_sequences)
+
+    # filter stop words from vocabulary after fitting
+    # we need to refit with filtered vocabulary
+    vocab = cv_model.vocabulary
+    filtered_vocab = [w for w in vocab if w.lower() not in stop_words and len(w) > 2]
+
+    # create new word sequences with filtered words only
+    def filter_words(words):
+        if not words:
+            return []
+        return [w for w in words if w.lower() not in stop_words and len(w) > 2]
+
+    from pyspark.sql.functions import udf
+    from pyspark.sql.types import ArrayType, StringType
+    filter_udf = udf(filter_words, ArrayType(StringType()))
+
+    word_sequences = word_sequences.withColumn("words", filter_udf(col("words")))
+
+    # refit with filtered words
     cv_model = count_vectorizer.fit(word_sequences)
     feature_df = cv_model.transform(word_sequences)
 
