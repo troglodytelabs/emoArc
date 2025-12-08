@@ -1,2 +1,1 @@
-# emoArc - Emotion Trajectory Analysis System
-
+"""Scratch-built book recommendation package."""
