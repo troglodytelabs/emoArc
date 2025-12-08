@@ -212,7 +212,7 @@ Calculated from basic emotions:
 
 Uses **per-book LDA** (each book trains its own model) for maximum topic interpretability:
 
-1. **Stop word filtering:** Comprehensive list (150+ words) including narrative stopwords ("said", "one", "upon")
+1. **Stop word filtering:** NLTK English stopwords (179 words) + custom narrative stopwords (50+ words: "said", "told", "asked", "replied", "exclaimed", etc.)
 2. **Feature extraction:** CountVectorizer per book with 1000-word vocabulary, min DF = 1
 3. **LDA training:** 5 topics per book, 20 iterations, seed = 42
 4. **Topic extraction:** Top 5 words per topic, stored as word arrays

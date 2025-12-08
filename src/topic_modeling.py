@@ -11,6 +11,73 @@ from pyspark.ml.clustering import LDA, LDAModel
 import numpy as np
 
 
+def get_comprehensive_stopwords():
+    """
+    Get comprehensive English stopword list combining NLTK + custom narrative words.
+
+    Returns:
+        set: Comprehensive stopword set
+    """
+    try:
+        import nltk
+        # try to load stopwords, download if not available
+        try:
+            from nltk.corpus import stopwords
+            nltk_stopwords = set(stopwords.words('english'))
+        except LookupError:
+            # download if not available
+            nltk.download('stopwords', quiet=True)
+            from nltk.corpus import stopwords
+            nltk_stopwords = set(stopwords.words('english'))
+    except Exception:
+        # fallback to basic list if NLTK fails
+        nltk_stopwords = set([
+            "a", "about", "above", "after", "again", "against", "all", "am", "an", "and", "any",
+            "are", "as", "at", "be", "because", "been", "before", "being", "below", "between",
+            "both", "but", "by", "can", "cannot", "could", "did", "do", "does", "doing", "down",
+            "during", "each", "few", "for", "from", "further", "had", "has", "have", "having",
+            "he", "her", "here", "hers", "herself", "him", "himself", "his", "how", "i", "if",
+            "in", "into", "is", "it", "its", "itself", "just", "me", "might", "more", "most",
+            "must", "my", "myself", "no", "nor", "not", "now", "of", "off", "on", "once", "only",
+            "or", "other", "ought", "our", "ours", "ourselves", "out", "over", "own", "same",
+            "she", "should", "so", "some", "such", "than", "that", "the", "their", "theirs",
+            "them", "themselves", "then", "there", "these", "they", "this", "those", "through",
+            "to", "too", "under", "until", "up", "very", "was", "we", "were", "what", "when",
+            "where", "which", "while", "who", "whom", "why", "will", "with", "would", "you",
+            "your", "yours", "yourself", "yourselves"
+        ])
+
+    # add custom narrative/literary stopwords that NLTK doesn't include
+    custom_narrative_stopwords = set([
+        # common narrative verbs
+        "said", "told", "asked", "replied", "answered", "cried", "exclaimed",
+        # positional/temporal
+        "one", "two", "three", "upon", "toward", "towards",
+        # adverbs that don't add semantic meaning
+        "well", "also", "just", "even", "quite", "rather", "already",
+        "always", "never", "often", "sometimes", "perhaps", "maybe",
+        # modal auxiliaries
+        "may", "might", "must", "shall", "ought",
+        # common verbs
+        "make", "made", "get", "got", "go", "went", "come", "came",
+        "take", "took", "give", "gave", "know", "knew", "think", "thought",
+        "see", "saw", "look", "looked", "seem", "seemed", "find", "found",
+        "put", "become", "became",
+        # conjunctions/transitions NLTK might miss
+        "however", "therefore", "thus", "hence", "indeed", "moreover",
+        "nevertheless", "otherwise", "yet", "still",
+        # quantifiers
+        "much", "many", "little", "less", "least", "more", "most",
+        # other common words
+        "almost", "certainly", "surely", "without", "within"
+    ])
+
+    # combine NLTK stopwords with custom narrative stopwords
+    comprehensive_stopwords = nltk_stopwords.union(custom_narrative_stopwords)
+
+    return comprehensive_stopwords
+
+
 def prepare_topic_features(
     spark: SparkSession, chunks_df, vocab_size: int = 5000, min_df: int = 2
 ):
@@ -26,29 +93,8 @@ def prepare_topic_features(
     Returns:
         Tuple of (feature_df, count_vectorizer_model)
     """
-    # comprehensive english stop words list for better topic quality
-    stop_words = [
-        "a", "about", "above", "after", "again", "against", "all", "am", "an", "and", "any", "are",
-        "as", "at", "be", "because", "been", "before", "being", "below", "between", "both", "but",
-        "by", "can", "cannot", "could", "did", "do", "does", "doing", "down", "during", "each",
-        "few", "for", "from", "further", "had", "has", "have", "having", "he", "her", "here",
-        "hers", "herself", "him", "himself", "his", "how", "i", "if", "in", "into", "is", "it",
-        "its", "itself", "just", "me", "might", "more", "most", "must", "my", "myself", "no",
-        "nor", "not", "now", "of", "off", "on", "once", "only", "or", "other", "ought", "our",
-        "ours", "ourselves", "out", "over", "own", "said", "same", "she", "should", "so", "some",
-        "such", "than", "that", "the", "their", "theirs", "them", "themselves", "then", "there",
-        "these", "they", "this", "those", "through", "to", "too", "under", "until", "up", "very",
-        "was", "we", "were", "what", "when", "where", "which", "while", "who", "whom", "why",
-        "will", "with", "would", "you", "your", "yours", "yourself", "yourselves",
-        # common narrative words that don't add semantic value
-        "one", "two", "may", "upon", "also", "well", "much", "many", "make", "made", "get", "got",
-        "go", "went", "come", "came", "take", "took", "see", "saw", "know", "knew", "think",
-        "thought", "tell", "told", "ask", "asked", "give", "gave", "find", "found", "seem",
-        "seemed", "look", "looked", "put", "without", "within", "toward", "however", "therefore",
-        "thus", "hence", "indeed", "moreover", "nevertheless", "otherwise", "yet", "still", "even",
-        "ever", "never", "always", "often", "sometimes", "already", "quite", "rather", "almost",
-        "perhaps", "maybe", "certainly", "surely"
-    ]
+    # get comprehensive stopwords (NLTK + custom narrative words)
+    stop_words = get_comprehensive_stopwords()
 
     # Group words by chunk
     word_sequences = chunks_df.groupBy("book_id", "chunk_index").agg(
@@ -406,29 +452,9 @@ def train_per_book_lda(
     """
     from pyspark.sql.functions import udf, collect_list
     from pyspark.sql.types import ArrayType, StringType, StructType, StructField, FloatType
-    
-    # comprehensive english stop words list
-    stop_words = set([
-        "a", "about", "above", "after", "again", "against", "all", "am", "an", "and", "any", "are",
-        "as", "at", "be", "because", "been", "before", "being", "below", "between", "both", "but",
-        "by", "can", "cannot", "could", "did", "do", "does", "doing", "down", "during", "each",
-        "few", "for", "from", "further", "had", "has", "have", "having", "he", "her", "here",
-        "hers", "herself", "him", "himself", "his", "how", "i", "if", "in", "into", "is", "it",
-        "its", "itself", "just", "me", "might", "more", "most", "must", "my", "myself", "no",
-        "nor", "not", "now", "of", "off", "on", "once", "only", "or", "other", "ought", "our",
-        "ours", "ourselves", "out", "over", "own", "said", "same", "she", "should", "so", "some",
-        "such", "than", "that", "the", "their", "theirs", "them", "themselves", "then", "there",
-        "these", "they", "this", "those", "through", "to", "too", "under", "until", "up", "very",
-        "was", "we", "were", "what", "when", "where", "which", "while", "who", "whom", "why",
-        "will", "with", "would", "you", "your", "yours", "yourself", "yourselves",
-        "one", "two", "may", "upon", "also", "well", "much", "many", "make", "made", "get", "got",
-        "go", "went", "come", "came", "take", "took", "see", "saw", "know", "knew", "think",
-        "thought", "tell", "told", "ask", "asked", "give", "gave", "find", "found", "seem",
-        "seemed", "look", "looked", "put", "without", "within", "toward", "however", "therefore",
-        "thus", "hence", "indeed", "moreover", "nevertheless", "otherwise", "yet", "still", "even",
-        "ever", "never", "always", "often", "sometimes", "already", "quite", "rather", "almost",
-        "perhaps", "maybe", "certainly", "surely"
-    ])
+
+    # get comprehensive stopwords (NLTK + custom narrative words)
+    stop_words = get_comprehensive_stopwords()
     
     # get unique book ids
     book_ids = chunks_df.select("book_id").distinct().rdd.flatMap(lambda x: x).collect()
