@@ -510,7 +510,7 @@ def create_narrative_arc_chart(book, narrative_analysis):
             mode='lines+markers',
             name='Total Intensity',
             line=dict(color='rgb(99, 110, 250)', width=3),
-            fill='toze ro',
+            fill='tozeroy',
             fillcolor='rgba(99, 110, 250, 0.2)',
         ),
         row=1, col=1
