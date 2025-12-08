@@ -380,3 +380,138 @@ def generate_book_summary(book_topics_interpretation):
         ])
         return f"mixed themes: {themes_str}"
 
+
+
+def train_per_book_lda(
+    spark: SparkSession,
+    chunks_df,
+    num_topics: int = 5,
+    vocab_size: int = 1000,
+    min_df: int = 1,
+    max_iter: int = 20
+):
+    """
+    Train separate LDA model for each book (per-book topics).
+    
+    Args:
+        spark: SparkSession
+        chunks_df: DataFrame with columns: book_id, chunk_index, word
+        num_topics: Number of topics per book (default: 5, fewer than corpus-wide)
+        vocab_size: Max vocabulary per book (default: 1000)
+        min_df: Minimum document frequency (default: 1 for per-book)
+        max_iter: LDA iterations (default: 20, fewer for speed)
+    
+    Returns:
+        DataFrame with columns: book_id, topics (array of topic word arrays)
+    """
+    from pyspark.sql.functions import udf, collect_list
+    from pyspark.sql.types import ArrayType, StringType, StructType, StructField, FloatType
+    
+    # comprehensive english stop words list
+    stop_words = set([
+        "a", "about", "above", "after", "again", "against", "all", "am", "an", "and", "any", "are",
+        "as", "at", "be", "because", "been", "before", "being", "below", "between", "both", "but",
+        "by", "can", "cannot", "could", "did", "do", "does", "doing", "down", "during", "each",
+        "few", "for", "from", "further", "had", "has", "have", "having", "he", "her", "here",
+        "hers", "herself", "him", "himself", "his", "how", "i", "if", "in", "into", "is", "it",
+        "its", "itself", "just", "me", "might", "more", "most", "must", "my", "myself", "no",
+        "nor", "not", "now", "of", "off", "on", "once", "only", "or", "other", "ought", "our",
+        "ours", "ourselves", "out", "over", "own", "said", "same", "she", "should", "so", "some",
+        "such", "than", "that", "the", "their", "theirs", "them", "themselves", "then", "there",
+        "these", "they", "this", "those", "through", "to", "too", "under", "until", "up", "very",
+        "was", "we", "were", "what", "when", "where", "which", "while", "who", "whom", "why",
+        "will", "with", "would", "you", "your", "yours", "yourself", "yourselves",
+        "one", "two", "may", "upon", "also", "well", "much", "many", "make", "made", "get", "got",
+        "go", "went", "come", "came", "take", "took", "see", "saw", "know", "knew", "think",
+        "thought", "tell", "told", "ask", "asked", "give", "gave", "find", "found", "seem",
+        "seemed", "look", "looked", "put", "without", "within", "toward", "however", "therefore",
+        "thus", "hence", "indeed", "moreover", "nevertheless", "otherwise", "yet", "still", "even",
+        "ever", "never", "always", "often", "sometimes", "already", "quite", "rather", "almost",
+        "perhaps", "maybe", "certainly", "surely"
+    ])
+    
+    # get unique book ids
+    book_ids = chunks_df.select("book_id").distinct().rdd.flatMap(lambda x: x).collect()
+    
+    results = []
+    
+    for book_id in book_ids:
+        try:
+            # filter chunks for this book
+            book_chunks = chunks_df.filter(col("book_id") == book_id)
+            
+            # group words by chunk, filter stop words
+            word_sequences = book_chunks.groupBy("book_id", "chunk_index").agg(
+                collect_list("word").alias("words")
+            )
+            
+            # filter stop words and short words
+            def filter_words(words):
+                if not words:
+                    return []
+                return [w for w in words if w.lower() not in stop_words and len(w) > 2]
+            
+            filter_udf = udf(filter_words, ArrayType(StringType()))
+            word_sequences = word_sequences.withColumn("words", filter_udf(col("words")))
+            
+            # check if we have enough data
+            word_count = word_sequences.count()
+            if word_count < 5:  # need at least 5 chunks
+                # return empty topics
+                results.append((book_id, []))
+                continue
+            
+            # create count vectorizer for this book
+            cv = CountVectorizer(
+                inputCol="words",
+                outputCol="features",
+                vocabSize=vocab_size,
+                minDF=min_df
+            )
+            
+            cv_model = cv.fit(word_sequences)
+            vectorized = cv_model.transform(word_sequences)
+            
+            # check vocabulary size
+            vocab = cv_model.vocabulary
+            if len(vocab) < num_topics:  # can't create more topics than vocabulary
+                # return single topic with all words
+                top_words = vocab[:min(5, len(vocab))]
+                results.append((book_id, [top_words]))
+                continue
+            
+            # train LDA model for this book
+            lda = LDA(
+                k=min(num_topics, len(vocab)),  # ensure k <= vocab size
+                maxIter=max_iter,
+                featuresCol="features",
+                seed=42
+            )
+            
+            lda_model = lda.fit(vectorized)
+            
+            # extract top words for each topic
+            topics_desc = lda_model.describeTopics(maxTermsPerTopic=5).collect()
+            
+            book_topics = []
+            for topic_row in topics_desc:
+                term_indices = topic_row['termIndices']
+                top_words = [vocab[idx] for idx in term_indices if idx < len(vocab)]
+                book_topics.append(top_words[:5])  # top 5 words per topic
+            
+            results.append((book_id, book_topics))
+            
+        except Exception as e:
+            # if LDA fails for this book, store empty topics
+            print(f"Warning: LDA failed for book {book_id}: {e}")
+            results.append((book_id, []))
+    
+    # create dataframe from results
+    schema = StructType([
+        StructField("book_id", StringType(), True),
+        StructField("book_topics", ArrayType(ArrayType(StringType())), True)
+    ])
+    
+    results_df = spark.createDataFrame(results, schema)
+    
+    return results_df

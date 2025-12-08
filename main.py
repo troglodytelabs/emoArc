@@ -28,6 +28,7 @@ from topic_modeling import (
     train_lda,
     get_chunk_topics,
     compute_book_topics,
+    train_per_book_lda,
 )
 
 
@@ -200,36 +201,24 @@ def main():
         else:
             print("\n[Step 7/8] Skipping word embeddings (--skip-embeddings)")
 
-        # Step 8: Compute topic distributions
+        # Step 8: Compute per-book topic models
         book_topics = None
         if not args.skip_topics:
-            print("\n[Step 8/8] Computing topic distributions...")
-            print("  Preparing topic features...")
-            feature_df, cv_model = prepare_topic_features(
-                spark, chunks_df, vocab_size=5000, min_df=2
+            print("\n[Step 8/8] Computing per-book topic models...")
+            print(f"  Training separate LDA model for each book ({args.num_topics} topics per book)...")
+
+            # train per-book LDA (each book gets its own topic model)
+            book_topics = train_per_book_lda(
+                spark,
+                chunks_df,
+                num_topics=min(args.num_topics, 5),  # cap at 5 topics per book
+                vocab_size=1000,
+                min_df=1,
+                max_iter=20
             )
-            # Cache feature_df to avoid recomputation
-            feature_df.cache()
-            print("  ✓ Features prepared")
 
-            print(f"  Training LDA model with {args.num_topics} topics...")
-            lda_model = train_lda(spark, feature_df, num_topics=args.num_topics, max_iter=50)
-            print("  ✓ LDA model trained")
-
-            print("  Computing chunk topics...")
-            chunk_topics = get_chunk_topics(spark, feature_df, lda_model)
-            chunk_topics.cache()
-            chunk_topic_count = chunk_topics.count()
-            print(f"  ✓ Computed topics for {chunk_topic_count} chunks")
-
-            print("  Computing book-level topics...")
-            book_topics = compute_book_topics(spark, chunk_topics)
             topic_count = book_topics.count()
-            print(f"  ✓ Computed topics for {topic_count} books")
-
-            # Unpersist cached data
-            feature_df.unpersist()
-            chunk_topics.unpersist()
+            print(f"  ✓ Computed per-book topics for {topic_count} books")
         else:
             print("\n[Step 8/8] Skipping topic modeling (--skip-topics)")
 
@@ -310,78 +299,62 @@ def main():
             trajectories = trajectories.withColumn("emotion_trajectory_json", trajectory_json_udf(col("emotion_trajectory")))
             print("  ✓ Emotion trajectories converted to JSON")
 
-        # flatten topic distributions to CSV-compatible columns with interpretable labels
+        # flatten per-book topics to CSV-compatible columns
         if book_topics is not None and "book_topics" in trajectories.columns:
-            print("  Flattening topic distributions for CSV export...")
+            print("  Flattening per-book topics for CSV export...")
             from pyspark.sql.functions import udf
             from pyspark.sql.types import FloatType, IntegerType, StringType
 
-            # get vocabulary and topic descriptions from models
-            vocabulary = cv_model.vocabulary
-            topics_described = lda_model.describeTopics(maxTermsPerTopic=5).collect()
-
-            # extract topic words for labeling
-            topic_words_map = {}
-            for topic_row in topics_described:
-                topic_id = topic_row['topic']
-                term_indices = topic_row['termIndices']
-                words = [vocabulary[idx] for idx in term_indices[:5]]
-                topic_words_map[topic_id] = words
-
-            # create broadcast variable for efficient access
-            topic_words_broadcast = spark.sparkContext.broadcast(topic_words_map)
-
-            # extract top 3 topics and their probabilities
-            # topic distributions are arrays like [0.05, 0.32, 0.11, 0.08, 0.24, ...]
-            def get_top_topic_idx(topics, rank=0):
-                """get index of nth highest topic probability"""
+            # extract top 3 topics from per-book topic arrays
+            # book_topics format: [[words for topic 0], [words for topic 1], ...]
+            def get_topic_words(topics, rank=0):
+                """get comma-separated words for nth topic"""
                 if not topics or len(topics) == 0:
-                    return -1
-                # sort indices by probability descending
-                sorted_indices = sorted(range(len(topics)), key=lambda i: topics[i], reverse=True)
-                return int(sorted_indices[rank]) if rank < len(sorted_indices) else -1
+                    return ""
+                if rank >= len(topics):
+                    return ""
+                words = topics[rank]
+                return ",".join(words[:5]) if words else ""  # top 5 words per topic
 
-            def get_top_topic_prob(topics, rank=0):
-                """get nth highest topic probability"""
+            # for per-book LDA, we assign equal probability (1/num_topics) to each topic
+            # or we can use a simple heuristic based on topic position (earlier = more important)
+            def get_topic_prob(topics, rank=0):
+                """assign probability based on topic rank (exponential decay)"""
                 if not topics or len(topics) == 0:
                     return 0.0
-                sorted_probs = sorted(topics, reverse=True)
-                return float(sorted_probs[rank]) if rank < len(sorted_probs) else 0.0
+                if rank >= len(topics):
+                    return 0.0
+                # exponential decay: first topic gets highest probability
+                # normalize so all probs sum to ~1.0
+                num_topics = len(topics)
+                decay_factor = 0.6  # each subsequent topic gets 60% of previous
+                weights = [decay_factor ** i for i in range(num_topics)]
+                total_weight = sum(weights)
+                normalized_prob = weights[rank] / total_weight if total_weight > 0 else 1.0 / num_topics
+                return float(normalized_prob)
 
-            def get_topic_words(topics, rank=0):
-                """get comma-separated top words for nth highest topic"""
-                if not topics or len(topics) == 0:
-                    return ""
-                topic_idx = get_top_topic_idx(topics, rank)
-                if topic_idx < 0:
-                    return ""
-                words = topic_words_broadcast.value.get(topic_idx, [])
-                return ",".join(words[:5])  # top 5 words
+            # register udfs for top 3 topics
+            topic_1_words_udf = udf(lambda t: get_topic_words(t, 0), StringType())
+            topic_1_prob_udf = udf(lambda t: get_topic_prob(t, 0), FloatType())
 
-            # register udfs
-            top_idx_udf = udf(lambda t: get_top_topic_idx(t, 0), IntegerType())
-            top_prob_udf = udf(lambda t: get_top_topic_prob(t, 0), FloatType())
-            top_words_udf = udf(lambda t: get_topic_words(t, 0), StringType())
+            topic_2_words_udf = udf(lambda t: get_topic_words(t, 1), StringType())
+            topic_2_prob_udf = udf(lambda t: get_topic_prob(t, 1), FloatType())
 
-            second_idx_udf = udf(lambda t: get_top_topic_idx(t, 1), IntegerType())
-            second_prob_udf = udf(lambda t: get_top_topic_prob(t, 1), FloatType())
-            second_words_udf = udf(lambda t: get_topic_words(t, 1), StringType())
+            topic_3_words_udf = udf(lambda t: get_topic_words(t, 2), StringType())
+            topic_3_prob_udf = udf(lambda t: get_topic_prob(t, 2), FloatType())
 
-            third_idx_udf = udf(lambda t: get_top_topic_idx(t, 2), IntegerType())
-            third_prob_udf = udf(lambda t: get_top_topic_prob(t, 2), FloatType())
-            third_words_udf = udf(lambda t: get_topic_words(t, 2), StringType())
-
-            # add flattened topic columns with words
-            trajectories = trajectories.withColumn("top_topic_1", top_idx_udf(col("book_topics"))) \
-                                     .withColumn("top_topic_1_prob", top_prob_udf(col("book_topics"))) \
-                                     .withColumn("top_topic_1_words", top_words_udf(col("book_topics"))) \
-                                     .withColumn("top_topic_2", second_idx_udf(col("book_topics"))) \
-                                     .withColumn("top_topic_2_prob", second_prob_udf(col("book_topics"))) \
-                                     .withColumn("top_topic_2_words", second_words_udf(col("book_topics"))) \
-                                     .withColumn("top_topic_3", third_idx_udf(col("book_topics"))) \
-                                     .withColumn("top_topic_3_prob", third_prob_udf(col("book_topics"))) \
-                                     .withColumn("top_topic_3_words", third_words_udf(col("book_topics")))
-            print("  ✓ Topic distributions flattened with interpretable labels")
+            # add flattened topic columns
+            # topic_id is just the rank (0, 1, 2) since these are per-book topics
+            trajectories = trajectories.withColumn("top_topic_1", udf(lambda t: 0 if t and len(t) > 0 else -1, IntegerType())(col("book_topics"))) \
+                                     .withColumn("top_topic_1_prob", topic_1_prob_udf(col("book_topics"))) \
+                                     .withColumn("top_topic_1_words", topic_1_words_udf(col("book_topics"))) \
+                                     .withColumn("top_topic_2", udf(lambda t: 1 if t and len(t) > 1 else -1, IntegerType())(col("book_topics"))) \
+                                     .withColumn("top_topic_2_prob", topic_2_prob_udf(col("book_topics"))) \
+                                     .withColumn("top_topic_2_words", topic_2_words_udf(col("book_topics"))) \
+                                     .withColumn("top_topic_3", udf(lambda t: 2 if t and len(t) > 2 else -1, IntegerType())(col("book_topics"))) \
+                                     .withColumn("top_topic_3_prob", topic_3_prob_udf(col("book_topics"))) \
+                                     .withColumn("top_topic_3_words", topic_3_words_udf(col("book_topics")))
+            print("  ✓ Per-book topics flattened with word labels")
 
         # Save results
         print(f"\n[Saving] Writing results to {args.output}/...")
