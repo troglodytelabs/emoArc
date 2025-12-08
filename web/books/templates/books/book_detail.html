@@ -113,6 +113,21 @@
                         <div class="text-lg font-bold text-gray-900">{{ narrative_analysis.climax_position|floatformat:0 }}%</div>
                     </div>
                 </div>
+
+                <!-- Explanation of arc computation -->
+                <div class="mt-4 p-3 bg-gray-50 rounded border-l-4 border-gray-400">
+                    <p class="text-xs text-gray-700">
+                        <strong>📖 How we compute narrative arcs:</strong> We divide the book into 20 chunks and calculate total emotional intensity (sum of joy, fear, sadness, anger, surprise) for each chunk. The climax is the point of highest intensity.
+                    </p>
+                    <p class="text-xs text-gray-700 mt-2">
+                        <strong>Three arc types:</strong>
+                    </p>
+                    <ul class="text-xs text-gray-600 mt-1 ml-4 space-y-1">
+                        <li>• <strong>In Medias Res</strong> (climax <30%): Starts at peak tension, then resolves</li>
+                        <li>• <strong>Classic Arc</strong> (climax 30-70%): Traditional rising action → climax → falling action</li>
+                        <li>• <strong>Slow Burn</strong> (climax >70%): Gradually builds to a climactic ending</li>
+                    </ul>
+                </div>
             </div>
             {% endif %}
 
@@ -184,10 +199,10 @@
             </div>
 
             <!-- Topic Modeling Results -->
-            {% if book.dominant_themes %}
             <div class="bg-white rounded-lg shadow-sm p-6">
                 <h2 class="text-2xl font-bold text-gray-900 mb-2">Thematic Topics (LDA)</h2>
-                <p class="text-sm text-gray-600 mb-4">Discovered through unsupervised topic modeling</p>
+                <p class="text-sm text-gray-600 mb-4">Topics are computed across ALL books' chunks, then each book gets a topic distribution showing which topics it contains</p>
+                {% if book.dominant_themes %}
                 <div class="space-y-4">
                     {% for theme in book.dominant_themes %}
                     <div class="border-l-4 border-purple-500 bg-purple-50 pl-4 py-3 rounded-r">
@@ -214,15 +229,21 @@
                     </div>
                     {% endfor %}
                 </div>
+                {% else %}
+                <div class="bg-yellow-50 border-l-4 border-yellow-400 p-4">
+                    <p class="text-sm text-yellow-800">
+                        <strong>⚠️ Topics not available for this book.</strong> Topic data may not have been generated during processing. Re-run the pipeline with the latest version to compute topics for this book.
+                    </p>
+                </div>
+                {% endif %}
                 <div class="mt-4 p-3 bg-blue-50 rounded border-l-4 border-blue-500">
                     <p class="text-xs text-blue-900">
-                        <strong>💡 About Topics:</strong> LDA (Latent Dirichlet Allocation) discovers hidden themes by clustering words that co-occur frequently.
-                        The keywords show what each topic is about. Higher percentages = more dominant themes.
+                        <strong>💡 About Topics:</strong> LDA (Latent Dirichlet Allocation) discovers hidden themes by clustering words that co-occur frequently across all books in the dataset.
+                        Each book receives a probability distribution over the discovered topics. The keywords show what each topic represents, and higher percentages indicate more dominant themes in this book.
                         <a href="{% url 'books:methodology' %}#lda" class="underline">Learn more →</a>
                     </p>
                 </div>
             </div>
-            {% endif %}
         </div>
 
         <!-- Sidebar -->
