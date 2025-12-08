@@ -27,8 +27,10 @@ pip install -r requirements.txt
 ## Prepare data
 1. Download the Gutenberg metadata CSV from Kaggle and save as
    `data/gutenberg_metadata.csv`.
-2. Ensure the CSV has at least `title` and `path` columns; `path` should point to
-   each text file relative to `data/`.
+2. Ensure the CSV has a **title** column and a **path-like** column. Common
+   aliases such as `book_title`, `name`, `file`, `filename`, `text_path`, and
+   `relative_path` are accepted automatically; `path` should point to each text
+   file relative to `data/`.
 3. Place the referenced text files under `data/` (e.g., `data/books/<file>.txt`).
 
 ## Usage
