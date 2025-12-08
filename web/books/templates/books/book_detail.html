@@ -196,12 +196,24 @@
                         <span class="text-gray-700">Measures sense of control (powerful vs powerless)</span>
                     </div>
                 </div>
+                <div class="mt-4 p-3 bg-blue-50 rounded border-l-4 border-blue-500">
+                    <p class="text-xs text-blue-900">
+                        <strong>📊 How VAD is computed:</strong> Each word in the NRC VAD Lexicon has V/A/D values (0-1 scale, 0.5=neutral).
+                        We match words in the book to the lexicon, then:
+                        <br>1. Calculate average V/A/D per chunk (20 chunks total)
+                        <br>2. Average across all chunks to get book-level scores
+                        <br>Low values are legitimate for books with dark/sad themes (e.g., Tale of Two Cities has low scores due to revolution/suffering themes).
+                    </p>
+                </div>
             </div>
 
             <!-- Topic Modeling Results -->
             <div class="bg-white rounded-lg shadow-sm p-6">
                 <h2 class="text-2xl font-bold text-gray-900 mb-2">Thematic Topics (LDA)</h2>
-                <p class="text-sm text-gray-600 mb-4">Topics are computed across ALL books' chunks, then each book gets a topic distribution showing which topics it contains</p>
+                <p class="text-sm text-gray-600 mb-4">
+                    <strong>⚠️ Topics are corpus-wide:</strong> LDA trains on ALL books together to find global themes (e.g., "romance," "adventure").
+                    Each book gets a distribution over these global topics. Only showing topics >10% to filter noise.
+                </p>
                 {% if book.dominant_themes %}
                 <div class="space-y-4">
                     {% for theme in book.dominant_themes %}

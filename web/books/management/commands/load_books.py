@@ -103,12 +103,13 @@ class Command(BaseCommand):
 
                             # load topic modeling results (top 3 topics with words and probabilities)
                             # format: [{"topic_id": 3, "probability": 0.32, "words": ["love", "heart", ...]}, ...]
+                            # only show topics with >10% probability to avoid noise from corpus-wide topics
                             topics = []
                             for i in [1, 2, 3]:
                                 topic_id = row.get(f'top_topic_{i}')
                                 topic_prob = row.get(f'top_topic_{i}_prob')
                                 topic_words = row.get(f'top_topic_{i}_words', '')
-                                if topic_id and topic_prob and float(topic_prob) > 0.05:  # only include if >5% probability
+                                if topic_id and topic_prob and float(topic_prob) > 0.10:  # only include if >10% probability
                                     try:
                                         topics.append({
                                             'topic_id': int(float(topic_id)),
