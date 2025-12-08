@@ -211,8 +211,8 @@
             <div class="bg-white rounded-lg shadow-sm p-6">
                 <h2 class="text-2xl font-bold text-gray-900 mb-2">Thematic Topics (LDA)</h2>
                 <p class="text-sm text-gray-600 mb-4">
-                    <strong>⚠️ Topics are corpus-wide:</strong> LDA trains on ALL books together to find global themes (e.g., "romance," "adventure").
-                    Each book gets a distribution over these global topics. Only showing topics >10% to filter noise.
+                    <strong>📚 Per-Book Topics:</strong> Each book has its own LDA model trained on its content.
+                    Topics are 100% specific to this book - no cross-contamination from other books. Only showing topics >10%.
                 </p>
                 {% if book.dominant_themes %}
                 <div class="space-y-4">
@@ -250,8 +250,9 @@
                 {% endif %}
                 <div class="mt-4 p-3 bg-blue-50 rounded border-l-4 border-blue-500">
                     <p class="text-xs text-blue-900">
-                        <strong>💡 About Topics:</strong> LDA (Latent Dirichlet Allocation) discovers hidden themes by clustering words that co-occur frequently across all books in the dataset.
-                        Each book receives a probability distribution over the discovered topics. The keywords show what each topic represents, and higher percentages indicate more dominant themes in this book.
+                        <strong>💡 How Per-Book LDA Works:</strong> We train a separate LDA model for each book using its 20 chunks.
+                        This discovers themes specific to this book's content by clustering words that co-occur frequently within the book.
+                        Earlier topics are weighted more heavily (exponential decay). Keywords show what each topic represents.
                         <a href="{% url 'books:methodology' %}#lda" class="underline">Learn more →</a>
                     </p>
                 </div>

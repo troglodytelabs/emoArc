@@ -208,22 +208,31 @@ Calculated from basic emotions:
 - Anxiety = (anticipation + fear) / 2
 - ...and 4 more
 
-### 5. LDA Topic Modeling
+### 5. Per-Book LDA Topic Modeling
 
-Uses Apache Spark MLlib's LDA implementation:
+Uses **per-book LDA** (each book trains its own model) for maximum topic interpretability:
 
-1. **Feature extraction:** CountVectorizer with 5000-word vocabulary, min document frequency = 2
-2. **LDA training:** 10 topics (default), 50 iterations, Dirichlet priors α = 50/K, β = 0.01
-3. **Topic extraction:** Top 3 topics per book with probabilities > 5%
-4. **Output:** Topic IDs and probabilities saved to CSV
+1. **Stop word filtering:** Comprehensive list (150+ words) including narrative stopwords ("said", "one", "upon")
+2. **Feature extraction:** CountVectorizer per book with 1000-word vocabulary, min DF = 1
+3. **LDA training:** 5 topics per book, 20 iterations, seed = 42
+4. **Topic extraction:** Top 5 words per topic, stored as word arrays
+5. **Probability assignment:** Exponential decay (decay factor = 0.6) for topic ranking
+6. **Output:** Top 3 topics with words and normalized probabilities saved to CSV
 
-**Generative process:**
+**Why per-book instead of corpus-wide?**
+- ✅ Topics are 100% specific to each book's content
+- ✅ No cross-contamination (e.g., "tarzan" won't appear in Tale of Two Cities)
+- ✅ More interpretable themes for individual book analysis
+- ❌ Topics aren't directly comparable across books (trade-off accepted)
+
+**Generative process (per book):**
 ```
-For each topic k: φₖ ~ Dir(β)
-For each document d: θ_d ~ Dir(α)
-For each word wₙ:
-  - Choose topic: zₙ ~ Multinomial(θ_d)
-  - Choose word: wₙ ~ Multinomial(φ_zₙ)
+For book b with 20 chunks:
+  For each topic k: φₖ ~ Dir(β)
+  For θ_b ~ Dir(α):
+    For each word w in chunk:
+      - Choose topic: z ~ Multinomial(θ_b)
+      - Choose word: w ~ Multinomial(φ_z)
 ```
 
 ### 6. Narrative Arc Detection
