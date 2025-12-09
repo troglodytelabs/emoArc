@@ -204,46 +204,47 @@ def get_chunk_topics(spark: SparkSession, feature_df, lda_model: LDAModel):
 def compute_book_topics(spark: SparkSession, chunk_topics_df):
     """
     Compute average topic distribution for each book.
-    
+
     Args:
         spark: SparkSession
         chunk_topics_df: DataFrame with columns: book_id, chunk_index, topics
-    
+
     Returns:
         DataFrame with book-level topic distributions
     """
+
     def average_topics(topic_vectors):
         """Compute average of multiple topic distributions."""
         import numpy as np  # Import inside UDF for worker nodes
-        
+
         if not topic_vectors or len(topic_vectors) == 0:
             return None
-        
+
         # Filter out None values
         valid_topics = [t for t in topic_vectors if t is not None]
         if len(valid_topics) == 0:
             return None
-        
+
+        # # For very large books, sample to avoid memory issues
+        # if len(valid_topics) > 200:
+        #     import random
+
+        #     valid_topics = random.sample(valid_topics, 200)
+
         # Convert to numpy arrays and compute mean
         np_topics = [np.array(t) for t in valid_topics]
         avg_topics = np.mean(np_topics, axis=0)
         return avg_topics.tolist()
-    
-    average_udf = udf(
-        average_topics,
-        ArrayType(DoubleType())
+
+    average_udf = udf(average_topics, ArrayType(DoubleType()))
+
+    book_topics = (
+        chunk_topics_df.groupBy("book_id")
+        .agg(collect_list("topics").alias("chunk_topics"))
+        .withColumn("book_topics", average_udf(col("chunk_topics")))
+        .select("book_id", "book_topics")
     )
-    
-    book_topics = chunk_topics_df.groupBy("book_id").agg(
-        collect_list("topics").alias("chunk_topics")
-    ).withColumn(
-        "book_topics",
-        average_udf(col("chunk_topics"))
-    ).select(
-        "book_id",
-        "book_topics"
-    )
-    
+
     return book_topics
 
 

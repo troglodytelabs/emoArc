@@ -17,14 +17,14 @@ import pandas as pd
 # add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
-from lexicon_loader import load_emotion_lexicon, load_vad_lexicon
-from text_preprocessor import create_chunks_df
-from emotion_scorer import (
-    score_chunks_with_emotions,
-    score_chunks_with_vad,
-    combine_emotion_vad_scores,
+from core import (
+    create_spark_session,
+    load_trajectories_with_types,
+    load_chunk_scores_with_types,
+    load_metadata,
+    get_input_trajectory,
+    find_books_by_emotion_preferences,
 )
-from trajectory_analyzer import analyze_trajectory
 from recommender import recommend
 from topic_modeling import (
     prepare_topic_features,
@@ -1820,20 +1820,24 @@ def show_explore_books():
 
             emotion_col = f"avg_{emotion_type.lower()}"
             if emotion_col in trajectories.columns:
+                # Select columns, avoiding duplicates
+                select_cols = ["book_id", "title", "author", emotion_col]
+                additional_cols = [
+                    "avg_joy",
+                    "avg_sadness",
+                    "avg_fear",
+                    "avg_anger",
+                    "avg_valence",
+                    "avg_arousal",
+                ]
+                # Only add additional cols if they're not already selected
+                for col_name in additional_cols:
+                    if col_name not in select_cols:
+                        select_cols.append(col_name)
+
                 top_books = (
                     trajectories.orderBy(col(emotion_col).desc())
-                    .select(
-                        "book_id",
-                        "title",
-                        "author",
-                        emotion_col,
-                        "avg_joy",
-                        "avg_sadness",
-                        "avg_fear",
-                        "avg_anger",
-                        "avg_valence",
-                        "avg_arousal",
-                    )
+                    .select(*select_cols)
                     .limit(top_n)
                 )
 
@@ -1845,6 +1849,124 @@ def show_explore_books():
                     st.write(f"{idx + 1}. {row['title']} by {row['author']}")
                     st.write(f"{emotion_type}: {row[emotion_col]:.4f}")
                     st.divider()
+
+
+def show_find_books_by_emotions():
+    """Show page for finding books by emotion preferences."""
+    st.header("Find Books by Emotion Preferences")
+    st.markdown(
+        "Specify what emotions you want to experience while reading, and we'll find books that match your preferences."
+    )
+
+    # Output directory
+    output_dir = "output"
+    trajectories_path = f"{output_dir}/trajectories"
+
+    if not os.path.exists(trajectories_path):
+        st.warning(
+            f"⚠️ Trajectories not found in {trajectories_path}. "
+            "Please run `python main.py` first to generate trajectories."
+        )
+        return
+
+    # Emotion preference sliders
+    st.subheader("Desired Emotion Levels")
+    st.markdown(
+        "Adjust the sliders to indicate how much of each emotion you want in your reading experience (0 = none, 1 = maximum)."
+    )
+
+    col1, col2 = st.columns(2)
+
+    emotion_preferences = {}
+
+    with col1:
+        emotion_preferences["joy"] = st.slider(
+            "Joy", 0.0, 1.0, 0.5, 0.1, key="pref_joy"
+        )
+        emotion_preferences["sadness"] = st.slider(
+            "Sadness", 0.0, 1.0, 0.0, 0.1, key="pref_sadness"
+        )
+        emotion_preferences["fear"] = st.slider(
+            "Fear", 0.0, 1.0, 0.0, 0.1, key="pref_fear"
+        )
+        emotion_preferences["anger"] = st.slider(
+            "Anger", 0.0, 1.0, 0.0, 0.1, key="pref_anger"
+        )
+
+    with col2:
+        emotion_preferences["anticipation"] = st.slider(
+            "Anticipation", 0.0, 1.0, 0.5, 0.1, key="pref_anticipation"
+        )
+        emotion_preferences["surprise"] = st.slider(
+            "Surprise", 0.0, 1.0, 0.3, 0.1, key="pref_surprise"
+        )
+        emotion_preferences["trust"] = st.slider(
+            "Trust", 0.0, 1.0, 0.5, 0.1, key="pref_trust"
+        )
+        emotion_preferences["disgust"] = st.slider(
+            "Disgust", 0.0, 1.0, 0.0, 0.1, key="pref_disgust"
+        )
+
+    # Number of results
+    top_n = st.slider("Number of books to show", 10, 50, 20, key="emotion_pref_top_n")
+
+    if st.button("Find Matching Books", type="primary"):
+        with st.spinner("Finding books that match your preferences..."):
+            spark = st.session_state.spark
+            trajectories = load_trajectories_with_types(spark, trajectories_path)
+
+            # Find matching books
+            matching_books = find_books_by_emotion_preferences(
+                spark, trajectories, emotion_preferences, top_n=top_n
+            )
+
+            if matching_books.count() == 0:
+                st.warning(
+                    "No books found. Try adjusting your emotion preferences or ensure trajectories are available."
+                )
+            else:
+                matching_books_pd = matching_books.toPandas()
+
+                st.success(
+                    f"Found {len(matching_books_pd)} books matching your preferences!"
+                )
+
+                # Display results
+                for idx, row in matching_books_pd.iterrows():
+                    with st.expander(
+                        f"{idx + 1}. {row['title']} by {row['author']} "
+                        f"(Match: {row['match_score']:.3f})"
+                    ):
+                        col1, col2 = st.columns(2)
+
+                        with col1:
+                            st.write("**Emotion Scores:**")
+                            st.write(f"- Joy: {row.get('avg_joy', 0):.4f}")
+                            st.write(f"- Sadness: {row.get('avg_sadness', 0):.4f}")
+                            st.write(f"- Fear: {row.get('avg_fear', 0):.4f}")
+                            st.write(f"- Anger: {row.get('avg_anger', 0):.4f}")
+
+                        with col2:
+                            st.write("**More Emotions:**")
+                            st.write(
+                                f"- Anticipation: {row.get('avg_anticipation', 0):.4f}"
+                            )
+                            st.write(f"- Surprise: {row.get('avg_surprise', 0):.4f}")
+                            st.write(f"- Trust: {row.get('avg_trust', 0):.4f}")
+                            st.write(f"- Disgust: {row.get('avg_disgust', 0):.4f}")
+
+                        st.write("**VAD Scores:**")
+                        st.write(f"- Valence: {row.get('avg_valence', 0):.4f}")
+                        st.write(f"- Arousal: {row.get('avg_arousal', 0):.4f}")
+
+                # Download button
+                csv = matching_books_pd.to_csv(index=False)
+                st.download_button(
+                    label="Download Results as CSV",
+                    data=csv,
+                    file_name="emotion_preference_matches.csv",
+                    mime="text/csv",
+                )
 
 
 def show_about():

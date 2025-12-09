@@ -44,6 +44,31 @@ def create_spark_session(app_name: str = "EmoArc"):
         .getOrCreate()
     )
 
+    # Shuffle partitions: Set explicitly (adaptive execution will optimize)
+    # For clusters, this should ideally be 1-2x number of vCores
+    builder = builder.config("spark.sql.shuffle.partitions", str(shuffle_partitions))
+
+    # Memory fractions: Only set in local mode (clusters usually have better defaults)
+    # These are Spark defaults: fraction=0.6, storageFraction=0.5
+    # We adjust for local mode to use more memory
+    if is_local:
+        builder = builder.config("spark.memory.fraction", "0.8")  # Use 80% of heap
+        builder = builder.config(
+            "spark.memory.storageFraction", "0.3"
+        )  # 30% storage, 70% execution
+
+    # Create session
+    spark = builder.getOrCreate()
+
+    # Log environment info
+    actual_master = spark.sparkContext.master
+    if is_local:
+        print(f"  Running in LOCAL mode (master: {actual_master})")
+        print(f"  Memory settings: driver={driver_memory}, executor={executor_memory}")
+    else:
+        print(f"  Running in CLUSTER mode (master: {actual_master})")
+        print("  Using cluster defaults (override via environment variables if needed)")
+
     spark.sparkContext.setLogLevel("WARN")
     return spark
 
@@ -101,6 +126,18 @@ def main():
         help="Number of LDA topics (default: 10)",
     )
     parser.add_argument(
+        "--driver-memory",
+        type=str,
+        default=None,
+        help="Spark driver memory (default: auto-detect based on environment)",
+    )
+    parser.add_argument(
+        "--executor-memory",
+        type=str,
+        default=None,
+        help="Spark executor memory (default: auto-detect based on environment)",
+    )
+    parser.add_argument(
         "--skip-embeddings",
         action="store_true",
         help="Skip word embeddings computation",
@@ -110,6 +147,13 @@ def main():
         action="store_true",
         help="Skip topic modeling",
     )
+    parser.add_argument(
+        "--mode",
+        type=str,
+        choices=["local", "cluster"],
+        default="local",
+        help="Spark execution mode: 'local' (default) or 'cluster' (for EMR/YARN)",
+    )
 
     args = parser.parse_args()
 
@@ -117,8 +161,16 @@ def main():
     print("EmoArc - Emotion Trajectory Analysis Pipeline")
     print("=" * 80)
 
-    # Create Spark session
-    spark = create_spark_session()
+    # Set Spark memory from arguments (only if provided)
+    import os
+
+    if args.driver_memory:
+        os.environ["SPARK_DRIVER_MEMORY"] = args.driver_memory
+    if args.executor_memory:
+        os.environ["SPARK_EXECUTOR_MEMORY"] = args.executor_memory
+
+    # Create Spark session with specified mode
+    spark = create_spark_session(mode=args.mode)
 
     try:
         # Step 1: Load lexicons
@@ -160,6 +212,9 @@ def main():
         vad_scores = score_chunks_with_vad(spark, chunks_df, vad_df)
         print(f"  ✓ Scored {vad_scores.count()} chunks with VAD")
 
+        # Unpersist chunks_df now that we have scores (saves memory)
+        chunks_df.unpersist()
+
         # Combine scores
         chunk_scores = combine_emotion_vad_scores(emotion_scores, vad_scores)
 
@@ -176,28 +231,38 @@ def main():
         book_embeddings = None
         if not args.skip_embeddings:
             print("\n[Step 7/8] Computing word embeddings...")
+            # Reload chunks_df for embeddings (we unpersisted it earlier)
+            print("  Recreating chunks for embeddings...")
+            chunks_df_emb = create_chunks_df(
+                spark,
+                books_df,
+                num_chunks=args.num_chunks,
+                max_chunk_size=args.max_chunk_size,
+            )
             print("  Training Word2Vec model...")
             word2vec_model = train_word2vec(
-                spark, chunks_df, vector_size=args.vector_size, min_count=5
+                spark, chunks_df_emb, vector_size=args.vector_size, min_count=5
             )
             print("  ✓ Word2Vec model trained")
 
             print("  Computing chunk embeddings...")
             chunk_embeddings = compute_chunk_embeddings(
-                spark, chunks_df, word2vec_model
+                spark, chunks_df_emb, word2vec_model
             )
             # Cache to avoid recomputation
             chunk_embeddings.cache()
             chunk_count = chunk_embeddings.count()
             print(f"  ✓ Computed embeddings for {chunk_count} chunks")
 
-            print("  Computing book-level embeddings (memory-efficient aggregation)...")
+            print("  Computing book-level embeddings...")
             book_embeddings = compute_book_embedding(spark, chunk_embeddings)
             book_count = book_embeddings.count()
             print(f"  ✓ Computed embeddings for {book_count} books")
 
             # Unpersist cached data
             chunk_embeddings.unpersist()
+            # Unpersist chunks_df_emb
+            chunks_df_emb.unpersist()
         else:
             print("\n[Step 7/8] Skipping word embeddings (--skip-embeddings)")
 

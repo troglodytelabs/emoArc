@@ -20,100 +20,53 @@ matplotlib.use("Agg")  # Use non-interactive backend
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
-from lexicon_loader import load_emotion_lexicon, load_vad_lexicon
-from text_preprocessor import create_chunks_df
-from emotion_scorer import (
-    score_chunks_with_emotions,
-    score_chunks_with_vad,
-    combine_emotion_vad_scores,
+from core import (
+    create_spark_session,
+    load_trajectories_with_types,
+    load_chunk_scores_with_types,
+    get_input_trajectory,
 )
-from trajectory_analyzer import analyze_trajectory
 from recommender import recommend
 
 
-def load_trajectories_with_types(spark, trajectories_path):
-    """Load trajectories CSV and cast columns to proper types."""
-    df = spark.read.option("header", "true").csv(trajectories_path)
+def plot_topic_distribution(book_topics_pd, book_title, output_path, num_topics=10):
+    """Plot topic distribution for a book."""
+    if book_topics_pd is None or len(book_topics_pd) == 0:
+        return False
 
-    # Cast numeric columns
-    numeric_cols = [
-        # All 8 Plutchik emotions - peaks
-        "max_anger",
-        "max_anticipation",
-        "max_disgust",
-        "max_fear",
-        "max_joy",
-        "max_sadness",
-        "max_surprise",
-        "max_trust",
-        # All 8 Plutchik emotions - averages
-        "avg_anger",
-        "avg_anticipation",
-        "avg_disgust",
-        "avg_fear",
-        "avg_joy",
-        "avg_sadness",
-        "avg_surprise",
-        "avg_trust",
-        "avg_valence",
-        "avg_arousal",
-        "avg_dominance",
-        "valence_std",
-        "arousal_std",
-        "num_chunks",
-    ]
+    topics = book_topics_pd.iloc[0]["book_topics"]
+    if topics is None:
+        return False
 
-    for col_name in numeric_cols:
-        if col_name in df.columns:
-            df = df.withColumn(col_name, col(col_name).cast("double"))
+    fig, ax = plt.subplots(figsize=(12, 6))
 
-    return df
-
-
-def load_chunk_scores_with_types(spark, chunk_scores_path):
-    """Load chunk scores CSV and cast columns to proper types."""
-    df = spark.read.option("header", "true").csv(chunk_scores_path)
-
-    # Cast chunk_index to int
-    if "chunk_index" in df.columns:
-        df = df.withColumn("chunk_index", col("chunk_index").cast("int"))
-
-    # Cast emotion columns to double
-    emotion_cols = [
-        "anger",
-        "anticipation",
-        "disgust",
-        "fear",
-        "joy",
-        "negative",
-        "positive",
-        "sadness",
-        "surprise",
-        "trust",
-    ]
-
-    for col_name in emotion_cols:
-        if col_name in df.columns:
-            df = df.withColumn(col_name, col(col_name).cast("double"))
-
-    # Cast VAD columns to double
-    vad_cols = ["avg_valence", "avg_arousal", "avg_dominance", "vad_word_count"]
-    for col_name in vad_cols:
-        if col_name in df.columns:
-            df = df.withColumn(col_name, col(col_name).cast("double"))
-
-    return df
-
-
-def create_spark_session():
-    """Create Spark session."""
-    spark = (
-        SparkSession.builder.appName("EmoArc Demo")
-        .config("spark.sql.adaptive.enabled", "true")
-        .getOrCreate()
+    topic_labels = [f"Topic {i + 1}" for i in range(len(topics))]
+    bars = ax.bar(
+        topic_labels, topics, color="steelblue", edgecolor="navy", linewidth=1
     )
-    spark.sparkContext.setLogLevel("WARN")
-    return spark
+
+    # Add value labels on bars
+    for bar in bars:
+        height = bar.get_height()
+        ax.text(
+            bar.get_x() + bar.get_width() / 2.0,
+            height,
+            f"{height:.3f}",
+            ha="center",
+            va="bottom",
+            fontsize=8,
+        )
+
+    ax.set_xlabel("Topic", fontsize=12)
+    ax.set_ylabel("Probability", fontsize=12)
+    ax.set_title(f"Topic Distribution: {book_title}", fontsize=14, fontweight="bold")
+    ax.grid(True, alpha=0.3, axis="y")
+    plt.xticks(rotation=45, ha="right")
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close()
+    print(f"  ✓ Saved topic plot to {output_path}")
+    return True
 
 
 def plot_emotion_trajectory(chunk_scores_pd, book_title, output_path):
@@ -246,216 +199,6 @@ def plot_emotion_trajectory(chunk_scores_pd, book_title, output_path):
     print(f"  ✓ Saved plot to {output_path}")
 
 
-def get_input_trajectory(
-    spark,
-    book_id=None,
-    text_file=None,
-    output_dir="output",
-    books_dir="data/books",
-    metadata_path="data/gutenberg_metadata.csv",
-    emotion_lexicon="data/NRC-Emotion-Lexicon-Wordlevel-v0.92.txt",
-    vad_lexicon="data/NRC-VAD-Lexicon-v2.1.txt",
-):
-    """
-    Get trajectory for input (book ID or text file).
-
-    Returns:
-        tuple: (trajectory_df, chunk_scores_df, title, author)
-    """
-    trajectory = None
-    chunk_scores = None
-    title = None
-    author = None
-
-    # Case 1: Text file input
-    if text_file:
-        print(f"  Processing text file: {text_file}")
-        try:
-            with open(text_file, "r", encoding="utf-8", errors="ignore") as f:
-                text = f.read()
-            title = os.path.basename(text_file).replace(".txt", "").replace("_", " ")
-            author = "File Input"
-
-            # Process the text
-            print("    Loading lexicons...")
-            emotion_df = load_emotion_lexicon(spark, emotion_lexicon)
-            vad_df = load_vad_lexicon(spark, vad_lexicon)
-
-            # Create DataFrame with the text
-            from pyspark.sql.types import StructType, StructField, StringType
-
-            schema = StructType(
-                [
-                    StructField("book_id", StringType(), True),
-                    StructField("title", StringType(), True),
-                    StructField("author", StringType(), True),
-                    StructField("text", StringType(), True),
-                ]
-            )
-            books_df = spark.createDataFrame(
-                [("text_file", title, author, text)], schema
-            )
-
-            print("    Creating chunks...")
-            # Adjust chunk size for small text
-            text_len = len(text)
-            chunk_size = 10000
-            if text_len < 20000:
-                chunk_size = max(100, text_len // 10)
-                print(
-                    f"    Adjusting chunk size to {chunk_size} for small text ({text_len} chars)..."
-                )
-            chunks_df = create_chunks_df(spark, books_df, chunk_size=chunk_size)
-
-            print("    Scoring chunks...")
-            emotion_scores = score_chunks_with_emotions(spark, chunks_df, emotion_df)
-            vad_scores = score_chunks_with_vad(spark, chunks_df, vad_df)
-            chunk_scores = combine_emotion_vad_scores(emotion_scores, vad_scores)
-
-            print("    Analyzing trajectory...")
-            trajectory = analyze_trajectory(spark, chunk_scores)
-
-        except Exception as e:
-            print(f"  ❌ Error processing text file: {e}")
-            return None, None, None, None
-
-    # Case 2: Book ID input
-    elif book_id:
-        print(f"  Processing book ID: {book_id}")
-
-        # Try to load from main.py output first
-        chunk_scores_path = f"{output_dir}/chunk_scores"
-        trajectories_path = f"{output_dir}/trajectories"
-
-        import glob
-
-        chunk_csv_files = glob.glob(f"{chunk_scores_path}/*.csv")
-        traj_csv_files = glob.glob(f"{trajectories_path}/*.csv")
-
-        # Check if both chunk_scores and trajectories exist in output
-        if (chunk_csv_files or os.path.exists(chunk_scores_path)) and (
-            traj_csv_files or os.path.exists(trajectories_path)
-        ):
-            try:
-                print("    Checking main.py output...")
-                output_chunks = load_chunk_scores_with_types(spark, chunk_scores_path)
-                output_chunks = output_chunks.filter(col("book_id") == book_id)
-
-                output_trajectories = load_trajectories_with_types(
-                    spark, trajectories_path
-                )
-                output_trajectories = output_trajectories.filter(
-                    col("book_id") == book_id
-                )
-
-                if output_chunks.count() > 0 and output_trajectories.count() > 0:
-                    print("    ✓ Using results from main.py output")
-                    chunk_scores = output_chunks
-                    trajectory = output_trajectories
-                    book_info = trajectory.select("title", "author").first()
-                    title = book_info["title"]
-                    author = book_info["author"]
-                else:
-                    print(
-                        "    Book not in main.py output, processing from Gutenberg data..."
-                    )
-                    chunk_scores = None
-                    trajectory = None
-            except Exception as e:
-                print(f"    Could not load from main.py output: {e}")
-                chunk_scores = None
-                trajectory = None
-
-        # Process from Gutenberg data if not in main.py output
-        if chunk_scores is None or trajectory is None:
-            print("    Loading from Gutenberg data...")
-            emotion_df = load_emotion_lexicon(spark, emotion_lexicon)
-            vad_df = load_vad_lexicon(spark, vad_lexicon)
-
-            metadata_df = spark.read.option("header", "true").csv(metadata_path)
-            metadata_df = metadata_df.filter(
-                (col("Language") == "en") & (col("Etext Number") == book_id)
-            )
-
-            if metadata_df.count() == 0:
-                print(f"  ❌ Book {book_id} not found in Gutenberg metadata!")
-                return None, None, None, None
-
-            # Get book info
-            book_info = metadata_df.select(
-                col("Etext Number").alias("book_id"),
-                col("Title").alias("title"),
-                col("Authors").alias("author"),
-            ).first()
-
-            title = book_info["title"]
-            author = book_info["author"]
-
-            from pyspark.sql.types import StructType, StructField, StringType
-            import re
-
-            def read_book_text(book_id: str) -> str:
-                """Read book text from file."""
-                try:
-                    book_path = f"{books_dir}/{book_id}"
-                    with open(book_path, "r", encoding="utf-8", errors="ignore") as f:
-                        text = f.read()
-                        # Remove Project Gutenberg headers/footers
-                        text = re.sub(
-                            r"\*\*\* START.*?\*\*\*", "", text, flags=re.DOTALL
-                        )
-                        text = re.sub(r"\*\*\* END.*?\*\*\*", "", text, flags=re.DOTALL)
-                        return text
-                except Exception as e:
-                    print(f"    Warning: Could not read book file {book_id}: {e}")
-                    return ""
-
-            book_text = read_book_text(book_id)
-            if not book_text:
-                print(f"  ❌ Could not read book file for {book_id}!")
-                return None, None, None, None
-
-            schema = StructType(
-                [
-                    StructField("book_id", StringType(), True),
-                    StructField("title", StringType(), True),
-                    StructField("author", StringType(), True),
-                    StructField("text", StringType(), True),
-                ]
-            )
-            books_df = spark.createDataFrame(
-                [(book_id, title, author, book_text)], schema
-            )
-
-            print(f"    Title: {title}")
-            print(f"    Author: {author}")
-
-            print("    Creating chunks...")
-            # Adjust chunk size for small text
-            text_len = len(book_text)
-            chunk_size = 10000
-            if text_len < 20000:
-                chunk_size = max(100, text_len // 10)
-                print(
-                    f"    Adjusting chunk size to {chunk_size} for small book ({text_len} chars)..."
-                )
-            chunks_df = create_chunks_df(spark, books_df, chunk_size=chunk_size)
-
-            print("    Scoring chunks...")
-            emotion_scores = score_chunks_with_emotions(spark, chunks_df, emotion_df)
-            vad_scores = score_chunks_with_vad(spark, chunks_df, vad_df)
-            chunk_scores = combine_emotion_vad_scores(emotion_scores, vad_scores)
-
-            print("    Analyzing trajectory...")
-            trajectory = analyze_trajectory(spark, chunk_scores)
-
-    else:
-        print("  ❌ Error: No input specified!")
-        return None, None, None, None
-
-    return trajectory, chunk_scores, title, author
-
-
 def demo_analysis(
     spark,
     book_id=None,
@@ -465,6 +208,8 @@ def demo_analysis(
     metadata_path="data/gutenberg_metadata.csv",
     emotion_lexicon="data/NRC-Emotion-Lexicon-Wordlevel-v0.92.txt",
     vad_lexicon="data/NRC-VAD-Lexicon-v2.1.txt",
+    compute_topics=False,
+    num_topics=10,
 ):
     """Analyze input and create visualizations."""
     print(f"\n{'=' * 80}")
@@ -472,16 +217,22 @@ def demo_analysis(
     print(f"{'=' * 80}")
 
     # Get trajectory and chunk scores
-    trajectory, chunk_scores, title, author = get_input_trajectory(
-        spark,
-        book_id,
-        text_file,
-        output_dir,
-        books_dir,
-        metadata_path,
-        emotion_lexicon,
-        vad_lexicon,
-    )
+    try:
+        trajectory, chunk_scores, title, author, book_topics = get_input_trajectory(
+            spark,
+            book_id=book_id,
+            text_file=text_file,
+            output_dir=output_dir,
+            books_dir=books_dir,
+            metadata_path=metadata_path,
+            emotion_lexicon=emotion_lexicon,
+            vad_lexicon=vad_lexicon,
+            compute_topics=compute_topics,
+            num_topics=num_topics,
+        )
+    except Exception as e:
+        print(f"  ❌ Error: {e}")
+        return
 
     if trajectory is None or chunk_scores is None:
         return
@@ -501,9 +252,28 @@ def demo_analysis(
         else "custom"
     )
     plot_id = str(plot_id).replace("/", "_").replace("\\", "_")
-    output_path = f"demo_output/{plot_id}_trajectory.png"
     os.makedirs("demo_output", exist_ok=True)
+
+    output_path = f"demo_output/{plot_id}_trajectory.png"
     plot_emotion_trajectory(chunk_scores_pd, title, output_path)
+
+    # Plot topic distribution if available
+    if book_topics is not None:
+        print("\n  Computing topic distribution...")
+        book_topics_pd = book_topics.toPandas()
+        topic_output_path = f"demo_output/{plot_id}_topics.png"
+        if plot_topic_distribution(
+            book_topics_pd, title, topic_output_path, num_topics
+        ):
+            topics = book_topics_pd.iloc[0]["book_topics"]
+            if topics:
+                # Get top 5 topics
+                topic_scores = [(i, topics[i]) for i in range(len(topics))]
+                topic_scores.sort(key=lambda x: x[1], reverse=True)
+
+                print("\n  Top Topics:")
+                for rank, (topic_idx, score) in enumerate(topic_scores[:5], 1):
+                    print(f"    {rank}. Topic {topic_idx + 1}: {score:.4f}")
 
     # Print statistics
     print("\n  Emotion Statistics:")
@@ -532,16 +302,21 @@ def demo_recommendations(
     print(f"{'=' * 80}")
 
     # Get trajectory for input
-    liked_trajectory, _, title, author = get_input_trajectory(
-        spark,
-        book_id,
-        text_file,
-        output_dir,
-        books_dir,
-        metadata_path,
-        emotion_lexicon,
-        vad_lexicon,
-    )
+    try:
+        liked_trajectory, _, title, author, _ = get_input_trajectory(
+            spark,
+            book_id=book_id,
+            text_file=text_file,
+            output_dir=output_dir,
+            books_dir=books_dir,
+            metadata_path=metadata_path,
+            emotion_lexicon=emotion_lexicon,
+            vad_lexicon=vad_lexicon,
+            compute_topics=False,  # Don't need topics for recommendations
+        )
+    except Exception as e:
+        print(f"  ❌ Error: {e}")
+        return
 
     if liked_trajectory is None:
         return
@@ -681,6 +456,17 @@ def main():
         default="data/NRC-VAD-Lexicon-v2.1.txt",
         help="Path to NRC VAD Lexicon",
     )
+    parser.add_argument(
+        "--compute-topics",
+        action="store_true",
+        help="Compute topic modeling (slower but provides topic analysis)",
+    )
+    parser.add_argument(
+        "--num-topics",
+        type=int,
+        default=10,
+        help="Number of topics for LDA (default: 10)",
+    )
 
     args = parser.parse_args()
 
@@ -711,6 +497,8 @@ def main():
                 metadata_path=args.metadata,
                 emotion_lexicon=args.emotion_lexicon,
                 vad_lexicon=args.vad_lexicon,
+                compute_topics=args.compute_topics,
+                num_topics=args.num_topics,
             )
 
         if args.recommend:
