@@ -248,7 +248,7 @@ def main():
                 spark,
                 books_df,
                 num_chunks=args.num_chunks,
-                max_chunk_size=args.max_chunk_size,
+                max_chunk_size=args.chunk_size,
             )
             print("  Training Word2Vec model...")
             word2vec_model = train_word2vec(
