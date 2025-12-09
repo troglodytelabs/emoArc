@@ -2,33 +2,34 @@
 Main pipeline for emotion trajectory analysis.
 """
 
-import sys
 import os
+import sys
+
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col
 
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
-from lexicon_loader import load_emotion_lexicon, load_vad_lexicon
-from text_preprocessor import load_books, create_chunks_df
 from emotion_scorer import (
+    combine_emotion_vad_scores,
     score_chunks_with_emotions,
     score_chunks_with_vad,
-    combine_emotion_vad_scores,
+)
+from lexicon_loader import load_emotion_lexicon, load_vad_lexicon
+from text_preprocessor import create_chunks_df, load_books
+from topic_modeling import (
+    compute_book_topics,
+    get_chunk_topics,
+    prepare_topic_features,
+    train_lda,
+    train_per_book_lda,
 )
 from trajectory_analyzer import analyze_trajectory
 from word_embeddings import (
-    train_word2vec,
-    compute_chunk_embeddings,
     compute_book_embedding,
-)
-from topic_modeling import (
-    prepare_topic_features,
-    train_lda,
-    get_chunk_topics,
-    compute_book_topics,
-    train_per_book_lda,
+    compute_chunk_embeddings,
+    train_word2vec,
 )
 
 
@@ -43,6 +44,9 @@ def create_spark_session(app_name: str = "EmoArc"):
         .config("spark.driver.maxResultSize", "2g")
         .getOrCreate()
     )
+
+    spark.sparkContext.setLogLevel("WARN")
+    return spark
 
     # Shuffle partitions: Set explicitly (adaptive execution will optimize)
     # For clusters, this should ideally be 1-2x number of vCores
@@ -95,13 +99,16 @@ def main():
         help="Path to NRC VAD Lexicon",
     )
     parser.add_argument(
-        "--chunk-size", type=int, default=10000, help="Chunk size in characters (ignored if --num-chunks is set)"
+        "--chunk-size",
+        type=int,
+        default=10000,
+        help="Chunk size in characters (ignored if --num-chunks is set)",
     )
     parser.add_argument(
         "--num-chunks",
         type=int,
         default=20,
-        help="Number of chunks per book for percentage-based chunking (default: 20). Set to 0 to use --chunk-size instead"
+        help="Number of chunks per book for percentage-based chunking (default: 20). Set to 0 to use --chunk-size instead",
     )
     parser.add_argument(
         "--limit",
@@ -170,7 +177,7 @@ def main():
         os.environ["SPARK_EXECUTOR_MEMORY"] = args.executor_memory
 
     # Create Spark session with specified mode
-    spark = create_spark_session(mode=args.mode)
+    spark = create_spark_session()
 
     try:
         # Step 1: Load lexicons
@@ -195,10 +202,14 @@ def main():
         print("\n[Step 3/8] Creating text chunks...")
         # use percentage-based chunking if num_chunks > 0, otherwise use fixed size
         if args.num_chunks > 0:
-            print(f"  Using percentage-based chunking: {args.num_chunks} chunks per book")
+            print(
+                f"  Using percentage-based chunking: {args.num_chunks} chunks per book"
+            )
             chunks_df = create_chunks_df(spark, books_df, num_chunks=args.num_chunks)
         else:
-            print(f"  Using fixed-size chunking: {args.chunk_size} characters per chunk")
+            print(
+                f"  Using fixed-size chunking: {args.chunk_size} characters per chunk"
+            )
             chunks_df = create_chunks_df(spark, books_df, chunk_size=args.chunk_size)
         print(f"  ✓ Created chunks (total rows: {chunks_df.count()})")
 
@@ -270,7 +281,9 @@ def main():
         book_topics = None
         if not args.skip_topics:
             print("\n[Step 8/8] Computing per-book topic models...")
-            print(f"  Training separate LDA model for each book ({args.num_topics} topics per book)...")
+            print(
+                f"  Training separate LDA model for each book ({args.num_topics} topics per book)..."
+            )
 
             # train per-book LDA (each book gets its own topic model)
             book_topics = train_per_book_lda(
@@ -279,7 +292,7 @@ def main():
                 num_topics=min(args.num_topics, 5),  # cap at 5 topics per book
                 vocab_size=1000,
                 min_df=1,
-                max_iter=20
+                max_iter=20,
             )
 
             topic_count = book_topics.count()
@@ -306,8 +319,14 @@ def main():
         # volatility = standard deviation of total emotional intensity across chunks
         if "emotion_trajectory" in trajectories.columns:
             print("  Calculating emotional volatility...")
-            from pyspark.sql.functions import udf, explode
-            from pyspark.sql.types import FloatType, ArrayType, StringType, StructType, StructField
+            from pyspark.sql.functions import explode, udf
+            from pyspark.sql.types import (
+                ArrayType,
+                FloatType,
+                StringType,
+                StructField,
+                StructType,
+            )
 
             # udf to calculate volatility from emotion trajectory array
             def calculate_volatility(trajectory):
@@ -324,18 +343,23 @@ def main():
                         return 0.0
                     # calculate standard deviation
                     mean_intensity = sum(intensities) / len(intensities)
-                    variance = sum((x - mean_intensity) ** 2 for x in intensities) / len(intensities)
-                    return float(variance ** 0.5)
+                    variance = sum(
+                        (x - mean_intensity) ** 2 for x in intensities
+                    ) / len(intensities)
+                    return float(variance**0.5)
                 except Exception:
                     return 0.0
 
             volatility_udf = udf(calculate_volatility, FloatType())
-            trajectories = trajectories.withColumn("emotional_volatility", volatility_udf(col("emotion_trajectory")))
+            trajectories = trajectories.withColumn(
+                "emotional_volatility", volatility_udf(col("emotion_trajectory"))
+            )
             print("  ✓ Emotional volatility calculated")
 
             # convert emotion_trajectory to JSON string for CSV storage
             # this preserves the data so django can load and display arc charts
             print("  Converting emotion trajectories to JSON...")
+
             def trajectory_to_json(trajectory):
                 """
                 convert trajectory array to json string, then base64 encode to avoid csv issues
@@ -344,24 +368,39 @@ def main():
                 if not trajectory or len(trajectory) == 0:
                     return ""
                 try:
-                    import json
                     import base64
-                    emotion_names = ["anger", "anticipation", "disgust", "fear", "joy", "sadness", "surprise", "trust"]
+                    import json
+
+                    emotion_names = [
+                        "anger",
+                        "anticipation",
+                        "disgust",
+                        "fear",
+                        "joy",
+                        "sadness",
+                        "surprise",
+                        "trust",
+                    ]
                     chunks = []
                     for chunk_data in trajectory:
                         # chunk_data = [chunk_idx, anger, anticipation, ..., trust]
                         chunk_dict = {}
                         for i, emotion in enumerate(emotion_names):
-                            chunk_dict[emotion] = float(chunk_data[i + 1])  # +1 to skip chunk_idx
+                            chunk_dict[emotion] = float(
+                                chunk_data[i + 1]
+                            )  # +1 to skip chunk_idx
                         chunks.append(chunk_dict)
                     json_str = json.dumps(chunks)
                     # base64 encode to avoid CSV quoting/escaping issues
-                    return base64.b64encode(json_str.encode('utf-8')).decode('utf-8')
+                    return base64.b64encode(json_str.encode("utf-8")).decode("utf-8")
                 except Exception:
                     return ""
 
             trajectory_json_udf = udf(trajectory_to_json, StringType())
-            trajectories = trajectories.withColumn("emotion_trajectory_json", trajectory_json_udf(col("emotion_trajectory")))
+            trajectories = trajectories.withColumn(
+                "emotion_trajectory_json",
+                trajectory_json_udf(col("emotion_trajectory")),
+            )
             print("  ✓ Emotion trajectories converted to JSON")
 
         # flatten per-book topics to CSV-compatible columns
@@ -393,9 +432,13 @@ def main():
                 # normalize so all probs sum to ~1.0
                 num_topics = len(topics)
                 decay_factor = 0.6  # each subsequent topic gets 60% of previous
-                weights = [decay_factor ** i for i in range(num_topics)]
+                weights = [decay_factor**i for i in range(num_topics)]
                 total_weight = sum(weights)
-                normalized_prob = weights[rank] / total_weight if total_weight > 0 else 1.0 / num_topics
+                normalized_prob = (
+                    weights[rank] / total_weight
+                    if total_weight > 0
+                    else 1.0 / num_topics
+                )
                 return float(normalized_prob)
 
             # register udfs for top 3 topics
@@ -410,15 +453,32 @@ def main():
 
             # add flattened topic columns
             # topic_id is just the rank (0, 1, 2) since these are per-book topics
-            trajectories = trajectories.withColumn("top_topic_1", udf(lambda t: 0 if t and len(t) > 0 else -1, IntegerType())(col("book_topics"))) \
-                                     .withColumn("top_topic_1_prob", topic_1_prob_udf(col("book_topics"))) \
-                                     .withColumn("top_topic_1_words", topic_1_words_udf(col("book_topics"))) \
-                                     .withColumn("top_topic_2", udf(lambda t: 1 if t and len(t) > 1 else -1, IntegerType())(col("book_topics"))) \
-                                     .withColumn("top_topic_2_prob", topic_2_prob_udf(col("book_topics"))) \
-                                     .withColumn("top_topic_2_words", topic_2_words_udf(col("book_topics"))) \
-                                     .withColumn("top_topic_3", udf(lambda t: 2 if t and len(t) > 2 else -1, IntegerType())(col("book_topics"))) \
-                                     .withColumn("top_topic_3_prob", topic_3_prob_udf(col("book_topics"))) \
-                                     .withColumn("top_topic_3_words", topic_3_words_udf(col("book_topics")))
+            trajectories = (
+                trajectories.withColumn(
+                    "top_topic_1",
+                    udf(lambda t: 0 if t and len(t) > 0 else -1, IntegerType())(
+                        col("book_topics")
+                    ),
+                )
+                .withColumn("top_topic_1_prob", topic_1_prob_udf(col("book_topics")))
+                .withColumn("top_topic_1_words", topic_1_words_udf(col("book_topics")))
+                .withColumn(
+                    "top_topic_2",
+                    udf(lambda t: 1 if t and len(t) > 1 else -1, IntegerType())(
+                        col("book_topics")
+                    ),
+                )
+                .withColumn("top_topic_2_prob", topic_2_prob_udf(col("book_topics")))
+                .withColumn("top_topic_2_words", topic_2_words_udf(col("book_topics")))
+                .withColumn(
+                    "top_topic_3",
+                    udf(lambda t: 2 if t and len(t) > 2 else -1, IntegerType())(
+                        col("book_topics")
+                    ),
+                )
+                .withColumn("top_topic_3_prob", topic_3_prob_udf(col("book_topics")))
+                .withColumn("top_topic_3_words", topic_3_words_udf(col("book_topics")))
+            )
             print("  ✓ Per-book topics flattened with word labels")
 
         # Save results
@@ -426,9 +486,9 @@ def main():
         os.makedirs(args.output, exist_ok=True)
 
         # Save chunk scores (text columns already dropped during preprocessing)
-        chunk_scores.repartition(4).write.mode("overwrite").option("header", "true").csv(
-            f"{args.output}/chunk_scores"
-        )
+        chunk_scores.repartition(4).write.mode("overwrite").option(
+            "header", "true"
+        ).csv(f"{args.output}/chunk_scores")
         print("  ✓ Chunk scores saved")
 
         # Remove array columns and text from trajectories (not supported by CSV)
@@ -436,7 +496,9 @@ def main():
         if "book_embedding" in trajectories.columns:
             columns_to_drop.append("book_embedding")
         if "book_topics" in trajectories.columns:
-            columns_to_drop.append("book_topics")  # drop original array, keep flattened columns
+            columns_to_drop.append(
+                "book_topics"
+            )  # drop original array, keep flattened columns
         if "text" in trajectories.columns:
             columns_to_drop.append("text")
 
