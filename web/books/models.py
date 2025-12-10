@@ -61,6 +61,9 @@ class Book(models.Model):
     primary_genre = models.CharField(max_length=100, blank=True)
     genre_scores = models.JSONField(default=dict)  # {"genre": score, ...}
 
+    # Gutenberg bookshelves (multiple genres from metadata)
+    bookshelves = models.JSONField(default=list)  # ["Browsing: Literature", "Browsing: Fiction", ...]
+
     # Topic modeling results
     topic_summary = models.TextField(blank=True)
     dominant_themes = models.JSONField(default=list)  # [{"theme": "...", "probability": 0.3}, ...]

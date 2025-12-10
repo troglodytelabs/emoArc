@@ -55,11 +55,12 @@ def load_books(
     if language:
         metadata_df = metadata_df.filter(col("Language") == language)
 
-    # Select relevant columns
+    # Select relevant columns including Bookshelves for genre classification
     metadata_df = metadata_df.select(
         col("Etext Number").alias("book_id"),
         col("Title").alias("title"),
         col("Authors").alias("author"),
+        col("Bookshelves").alias("bookshelves"),  # Genre categories (semicolon-delimited)
     )
 
     if limit:

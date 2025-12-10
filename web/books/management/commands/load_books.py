@@ -61,6 +61,14 @@ class Command(BaseCommand):
                             book.title = row.get('title', book.title)
                             book.author = row.get('author', book.author)
 
+                            # Parse bookshelves (semicolon-delimited categories from Gutenberg metadata)
+                            bookshelves_raw = row.get('bookshelves', '')
+                            if bookshelves_raw and bookshelves_raw.strip():
+                                # Split on semicolon and strip whitespace from each category
+                                book.bookshelves = [shelf.strip() for shelf in bookshelves_raw.split(';') if shelf.strip()]
+                            else:
+                                book.bookshelves = []
+
                             # Update emotion scores
                             for emotion in ['anger', 'anticipation', 'disgust', 'fear', 'joy', 'sadness', 'surprise', 'trust']:
                                 value = row.get(f'avg_{emotion}', 0.0)

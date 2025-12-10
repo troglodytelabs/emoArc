@@ -33,7 +33,8 @@ def analyze_trajectory(spark: SparkSession, chunk_scores_df):
     """
     # Calculate trajectory statistics per book
     # Use all 8 Plutchik emotions: anger, anticipation, disgust, fear, joy, sadness, surprise, trust
-    book_trajectories = chunk_scores_df.groupBy("book_id", "title", "author").agg(
+    # Include bookshelves for genre-based filtering and recommendations
+    book_trajectories = chunk_scores_df.groupBy("book_id", "title", "author", "bookshelves").agg(
         # Emotion peaks (all 8 Plutchik emotions)
         spark_max("anger").alias("max_anger"),
         spark_max("anticipation").alias("max_anticipation"),
