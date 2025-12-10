@@ -131,17 +131,6 @@
             </div>
             {% endif %}
 
-            <!-- Emotion Heatmap -->
-            {% if heatmap_chart %}
-            <div class="bg-white rounded-lg shadow-sm p-6">
-                <h2 class="text-2xl font-bold text-gray-900 mb-2">Emotion Intensity Across Narrative</h2>
-                <p class="text-sm text-gray-600 mb-4">
-                    Heatmap showing how each emotion changes throughout the book's progression
-                </p>
-                <div id="heatmap-chart"></div>
-            </div>
-            {% endif %}
-
             <!-- Emotion Radar with Percentiles -->
             <div class="bg-white rounded-lg shadow-sm p-6">
                 <h2 class="text-2xl font-bold text-gray-900 mb-2">Emotion Profile</h2>
@@ -175,86 +164,6 @@
                     <strong>How to read this:</strong> Percentile rankings show how this book compares to others.
                     75th percentile means more emotional than 75% of books.
                     <a href="{% url 'books:methodology' %}" class="text-purple-600 hover:text-purple-800 ml-1">Learn more →</a>
-                </div>
-            </div>
-
-            <!-- VAD Chart -->
-            <div class="bg-white rounded-lg shadow-sm p-6">
-                <h2 class="text-2xl font-bold text-gray-900 mb-2">Emotional Dimensions (VAD)</h2>
-                <div id="vad-chart"></div>
-                <div class="mt-4 space-y-2 text-sm">
-                    <div class="flex items-start">
-                        <span class="w-24 font-semibold text-green-700">Valence:</span>
-                        <span class="text-gray-700">Measures positivity (happy words) vs negativity (sad words)</span>
-                    </div>
-                    <div class="flex items-start">
-                        <span class="w-24 font-semibold text-amber-700">Arousal:</span>
-                        <span class="text-gray-700">Measures emotional intensity (excited vs calm)</span>
-                    </div>
-                    <div class="flex items-start">
-                        <span class="w-24 font-semibold text-purple-700">Dominance:</span>
-                        <span class="text-gray-700">Measures sense of control (powerful vs powerless)</span>
-                    </div>
-                </div>
-                <div class="mt-4 p-3 bg-blue-50 rounded border-l-4 border-blue-500">
-                    <p class="text-xs text-blue-900">
-                        <strong>📊 How VAD is computed:</strong> Each word in the NRC VAD Lexicon has V/A/D values (0-1 scale, 0.5=neutral).
-                        We match words in the book to the lexicon, then:
-                        <br>1. Calculate average V/A/D per chunk (20 chunks total)
-                        <br>2. Average across all chunks to get book-level scores
-                        <br>Low values are legitimate for books with dark/sad themes (e.g., Tale of Two Cities has low scores due to revolution/suffering themes).
-                    </p>
-                </div>
-            </div>
-
-            <!-- Topic Modeling Results -->
-            <div class="bg-white rounded-lg shadow-sm p-6">
-                <h2 class="text-2xl font-bold text-gray-900 mb-2">Thematic Topics (LDA)</h2>
-                <p class="text-sm text-gray-600 mb-4">
-                    <strong>📚 Per-Book Topics:</strong> Each book has its own LDA model trained on its content.
-                    Topics are 100% specific to this book - no cross-contamination from other books. Only showing topics >10%.
-                </p>
-                {% if book.dominant_themes %}
-                <div class="space-y-4">
-                    {% for theme in book.dominant_themes %}
-                    <div class="border-l-4 border-purple-500 bg-purple-50 pl-4 py-3 rounded-r">
-                        <div class="flex justify-between items-start mb-2">
-                            <div class="flex-1">
-                                <div class="font-semibold text-gray-900 mb-1">Topic {{ theme.topic_id }}</div>
-                                {% if theme.words %}
-                                <div class="flex flex-wrap gap-2 mt-2">
-                                    {% for word in theme.words %}
-                                    <span class="px-2 py-1 bg-white border border-purple-200 rounded text-xs text-gray-700">
-                                        {{ word }}
-                                    </span>
-                                    {% endfor %}
-                                </div>
-                                {% else %}
-                                <div class="text-xs text-gray-500 italic">Keywords not available</div>
-                                {% endif %}
-                            </div>
-                            <div class="text-right ml-4">
-                                <div class="text-lg font-bold text-purple-600">{{ theme.probability|floatformat:1 }}%</div>
-                                <div class="text-xs text-gray-500">weight</div>
-                            </div>
-                        </div>
-                    </div>
-                    {% endfor %}
-                </div>
-                {% else %}
-                <div class="bg-yellow-50 border-l-4 border-yellow-400 p-4">
-                    <p class="text-sm text-yellow-800">
-                        <strong>⚠️ Topics not available for this book.</strong> Topic data may not have been generated during processing. Re-run the pipeline with the latest version to compute topics for this book.
-                    </p>
-                </div>
-                {% endif %}
-                <div class="mt-4 p-3 bg-blue-50 rounded border-l-4 border-blue-500">
-                    <p class="text-xs text-blue-900">
-                        <strong>💡 How Per-Book LDA Works:</strong> We train a separate LDA model for each book using its 20 chunks.
-                        This discovers themes specific to this book's content by clustering words that co-occur frequently within the book.
-                        Earlier topics are weighted more heavily (exponential decay). Keywords show what each topic represents.
-                        <a href="{% url 'books:methodology' %}#lda" class="underline">Learn more →</a>
-                    </p>
                 </div>
             </div>
         </div>
@@ -364,14 +273,6 @@
     const trajectoryChart = {{ trajectory_chart|safe }};
     Plotly.newPlot('trajectory-chart', trajectoryChart.data, trajectoryChart.layout, {responsive: true, displayModeBar: false});
     {% endif %}
-
-    {% if heatmap_chart %}
-    const heatmapChart = {{ heatmap_chart|safe }};
-    Plotly.newPlot('heatmap-chart', heatmapChart.data, heatmapChart.layout, {responsive: true, displayModeBar: false});
-    {% endif %}
-
-    const vadChart = {{ vad_chart|safe }};
-    Plotly.newPlot('vad-chart', vadChart.data, vadChart.layout, {responsive: true, displayModeBar: false});
 </script>
 
 <!-- Custom template filter for dict access -->
