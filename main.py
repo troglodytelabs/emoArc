@@ -11,7 +11,7 @@ from pyspark.sql.functions import col
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
 from lexicon_loader import load_emotion_lexicon, load_vad_lexicon
-from text_preprocessor import load_books, create_chunks_df
+from text_preprocessor import load_and_chunk_books
 from emotion_scorer import score_chunks
 from trajectory_analyzer import analyze_trajectory
 from word_embeddings import (
@@ -223,45 +223,44 @@ def main():
     spark = create_spark_session(mode=args.mode)
 
     try:
-        # Step 1: Load lexicons
+        # Step 1: Load lexicons (small, safe to cache)
         print("\n[Step 1/6] Loading lexicons...")
         emotion_df = load_emotion_lexicon(spark, args.emotion_lexicon)
         vad_df = load_vad_lexicon(spark, args.vad_lexicon)
+        # Cache lexicons - they're small and reused for every chunk
+        emotion_df.cache()
+        vad_df.cache()
         print(f"  ✓ Loaded {emotion_df.count()} emotion word-emotion pairs")
         print(f"  ✓ Loaded {vad_df.count()} VAD terms")
 
-        # Step 2: Load books
-        print("\n[Step 2/6] Loading books...")
-        books_df = load_books(
+        # Step 2+3: Load books AND create chunks in optimized single pipeline
+        # This never materializes the full text column - goes directly from
+        # file content → words, which is much more memory efficient
+        print("\n[Step 2/6] Loading books and creating chunks...")
+        chunks_df = load_and_chunk_books(
             spark,
             args.books_dir,
             args.metadata,
+            num_chunks=args.num_chunks,
             language=args.language,
             limit=args.limit,
         )
-        print(f"  ✓ Loaded {books_df.count()} books")
+        # Use disk-based persistence instead of memory cache
+        # This allows Spark to spill to disk when memory is tight
+        from pyspark import StorageLevel
 
-        # Step 3: Create chunks (ONCE, cached for all subsequent operations)
-        print("\n[Step 3/6] Creating text chunks...")
-        chunks_df = create_chunks_df(
-            spark,
-            books_df,
-            num_chunks=args.num_chunks,
-        )
-        # chunks_df now has words as array (NOT exploded) - much more memory efficient
-        # ~2000 rows for 100 books instead of ~10 million rows
-        chunks_df.cache()
+        chunks_df.persist(StorageLevel.MEMORY_AND_DISK)
         chunk_count = chunks_df.count()
-        print(f"  ✓ Created {chunk_count} chunks")
+        book_count = chunks_df.select("book_id").distinct().count()
+        print(f"  ✓ Loaded {book_count} books, created {chunk_count} chunks")
 
         # Step 4: Score chunks with emotions AND VAD in one pass
-        print("\n[Step 4/6] Scoring chunks with emotions and VAD...")
+        print("\n[Step 3/6] Scoring chunks with emotions and VAD...")
         chunk_scores = score_chunks(spark, chunks_df, emotion_df, vad_df)
-        chunk_scores.cache()
-        print(f"  ✓ Scored {chunk_scores.count()} chunks with emotions and VAD")
+        # Don't cache chunk_scores - let Spark pipeline it through to trajectories
 
         # Step 5: Analyze trajectories
-        print("\n[Step 5/6] Analyzing emotion trajectories...")
+        print("\n[Step 4/6] Analyzing emotion trajectories...")
         trajectories = analyze_trajectory(spark, chunk_scores)
 
         # Filter out books with no chunks (shouldn't happen, but safety check)
@@ -269,15 +268,15 @@ def main():
         trajectory_count = trajectories.count()
         print(f"  ✓ Analyzed {trajectory_count} book trajectories")
 
-        # Step 6: Compute word embeddings and topic distributions
+        # Step 5: Compute word embeddings and topic distributions
         # Note: Embeddings and topics are computed at BOOK level for recommendations
         # (chunk-level is aggregated to book-level)
         book_embeddings = None
         book_topics = None
 
         if not args.skip_embeddings:
-            print("\n[Step 6a/6] Computing word embeddings...")
-            # Reuse cached chunks_df
+            print("\n[Step 5a/5] Computing word embeddings...")
+            # Reuse persisted chunks_df
             print("  Training Word2Vec model...")
             word2vec_model = train_word2vec(
                 spark, chunks_df, vector_size=args.vector_size, min_count=5
@@ -288,7 +287,8 @@ def main():
             chunk_embeddings = compute_chunk_embeddings(
                 spark, chunks_df, word2vec_model
             )
-            chunk_embeddings.cache()
+            # Use disk-based persistence for intermediate results
+            chunk_embeddings.persist(StorageLevel.MEMORY_AND_DISK)
             emb_count = chunk_embeddings.count()
             print(f"  ✓ Computed embeddings for {emb_count} chunks")
 
@@ -299,16 +299,16 @@ def main():
 
             chunk_embeddings.unpersist()
         else:
-            print("\n[Step 6a/6] Skipping word embeddings (--skip-embeddings)")
+            print("\n[Step 5a/5] Skipping word embeddings (--skip-embeddings)")
 
         if not args.skip_topics:
-            print("\n[Step 6b/6] Computing topic distributions...")
-            # Reuse cached chunks_df
+            print("\n[Step 5b/5] Computing topic distributions...")
+            # Reuse persisted chunks_df
             print("  Preparing topic features...")
             feature_df, cv_model = prepare_topic_features(
                 spark, chunks_df, vocab_size=5000, min_df=2
             )
-            feature_df.cache()
+            feature_df.persist(StorageLevel.MEMORY_AND_DISK)
             print("  ✓ Features prepared")
 
             print(f"  Training LDA model with {args.num_topics} topics...")
@@ -319,7 +319,7 @@ def main():
 
             print("  Computing chunk topics...")
             chunk_topics = get_chunk_topics(spark, feature_df, lda_model)
-            chunk_topics.cache()
+            chunk_topics.persist(StorageLevel.MEMORY_AND_DISK)
             chunk_topic_count = chunk_topics.count()
             print(f"  ✓ Computed topics for {chunk_topic_count} chunks")
 
