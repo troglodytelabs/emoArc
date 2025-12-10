@@ -19,12 +19,6 @@
                 <h1 class="text-4xl font-bold text-gray-900 mb-2">{{ book.title }}</h1>
                 <p class="text-xl text-gray-600 mb-4">by {{ book.author }}</p>
 
-                <!-- VAD Interpretation -->
-                <div class="bg-gradient-to-r from-purple-50 to-pink-50 rounded-lg p-4 mb-4">
-                    <h2 class="text-sm font-semibold text-purple-900 uppercase tracking-wide mb-2">Emotional Tone</h2>
-                    <p class="text-lg text-gray-800">{{ vad_interpretation }}</p>
-                </div>
-
                 <div class="flex items-center gap-3">
                     {% if book.primary_genre %}
                     <span class="px-4 py-2 bg-purple-100 text-purple-800 rounded-full text-sm font-medium">
@@ -46,41 +40,39 @@
             </div>
         </div>
 
-        <!-- Key Metrics -->
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6">
-            <div class="border-l-4 border-green-500 pl-4 bg-green-50 rounded-r p-3">
-                <div class="text-sm text-gray-600">Valence</div>
-                <div class="text-2xl font-bold text-green-700">{{ book.avg_valence|floatformat:3 }}</div>
-                <div class="text-xs text-gray-500">
-                    {% if book.avg_valence > 0.6 %}Very Positive{% elif book.avg_valence > 0.5 %}Positive{% elif book.avg_valence > 0.4 %}Negative{% else %}Very Negative{% endif %}
-                </div>
-            </div>
-            <div class="border-l-4 border-amber-500 pl-4 bg-amber-50 rounded-r p-3">
-                <div class="text-sm text-gray-600">Arousal</div>
-                <div class="text-2xl font-bold text-amber-700">{{ book.avg_arousal|floatformat:3 }}</div>
-                <div class="text-xs text-gray-500">
-                    {% if book.avg_arousal > 0.6 %}Very Intense{% elif book.avg_arousal > 0.5 %}Moderate{% elif book.avg_arousal > 0.4 %}Calm{% else %}Very Calm{% endif %}
-                </div>
-            </div>
-            <div class="border-l-4 border-purple-500 pl-4 bg-purple-50 rounded-r p-3">
-                <div class="text-sm text-gray-600">Dominance</div>
-                <div class="text-2xl font-bold text-purple-700">{{ book.avg_dominance|floatformat:3 }}</div>
-                <div class="text-xs text-gray-500">
-                    {% if book.avg_dominance > 0.6 %}High Control{% elif book.avg_dominance > 0.5 %}Balanced{% elif book.avg_dominance > 0.4 %}Submissive{% else %}Powerless{% endif %}
-                </div>
-            </div>
-            <div class="border-l-4 border-blue-500 pl-4 bg-blue-50 rounded-r p-3">
-                <div class="text-sm text-gray-600">Emotional Volatility</div>
-                <div class="text-2xl font-bold text-blue-700">{{ book.emotional_volatility|floatformat:2 }}</div>
-                <div class="text-xs text-gray-500">
-                    {% if book.emotional_volatility > 0.15 %}Highly Variable{% elif book.emotional_volatility > 0.10 %}Variable{% else %}Steady{% endif %}
-                </div>
-                <div class="mt-2 pt-2 border-t border-blue-200">
+        <!-- Key Narrative Metrics -->
+        <div class="mt-6 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg p-6 border-l-4 border-blue-500">
+            <h3 class="text-lg font-bold text-gray-900 mb-4">Narrative Dynamics</h3>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                    <div class="flex items-center justify-between mb-2">
+                        <span class="text-sm font-medium text-gray-700">Emotional Volatility</span>
+                        <span class="text-2xl font-bold text-blue-700">{{ book.emotional_volatility|floatformat:1 }}</span>
+                    </div>
+                    <div class="w-full bg-gray-200 rounded-full h-2 mb-2">
+                        <div class="bg-blue-600 h-2 rounded-full" style="width: {% if book.emotional_volatility > 100 %}100{% else %}{{ book.emotional_volatility }}{% endif %}%"></div>
+                    </div>
                     <p class="text-xs text-gray-600">
-                        <strong>📊 Calculation:</strong> Standard deviation of total emotional intensity across all 20 narrative chunks.
-                        Higher values indicate dramatic emotional shifts; lower values suggest a steady emotional tone throughout the story.
+                        {% if book.emotional_volatility > 15 %}<strong>Highly Variable:</strong> Dramatic emotional shifts throughout{% elif book.emotional_volatility > 10 %}<strong>Variable:</strong> Moderate emotional fluctuations{% else %}<strong>Steady:</strong> Consistent emotional tone{% endif %}
                     </p>
                 </div>
+                <div>
+                    <div class="flex items-center justify-between mb-2">
+                        <span class="text-sm font-medium text-gray-700">Narrative Climax</span>
+                        <span class="text-2xl font-bold text-indigo-700">{{ book.climax_position|floatformat:0 }}%</span>
+                    </div>
+                    <div class="w-full bg-gray-200 rounded-full h-2 mb-2">
+                        <div class="bg-indigo-600 h-2 rounded-full" style="width: {{ book.climax_position }}%"></div>
+                    </div>
+                    <p class="text-xs text-gray-600">
+                        Point of highest emotional intensity in the narrative
+                    </p>
+                </div>
+            </div>
+            <div class="mt-4 pt-4 border-t border-blue-200">
+                <p class="text-xs text-gray-600">
+                    <strong>💡 How it works:</strong> Volatility is the standard deviation of emotional intensity across 20 chunks (typical range: 0-100+). Higher = more dramatic shifts. Climax shows where peak emotion occurs in the story.
+                </p>
             </div>
         </div>
     </div>
@@ -91,41 +83,26 @@
             <!-- Narrative Arc -->
             {% if narrative_analysis %}
             <div class="bg-white rounded-lg shadow-sm p-6">
-                <h2 class="text-2xl font-bold text-gray-900 mb-2">Narrative Structure</h2>
-                <div class="bg-blue-50 border-l-4 border-blue-500 p-4 mb-4">
-                    <p class="font-semibold text-blue-900">{{ narrative_analysis.arc_type }}</p>
-                    <p class="text-sm text-blue-800 mt-1">
-                        Climax occurs at <strong>{{ narrative_analysis.climax_position|floatformat:1 }}%</strong> through the narrative
-                    </p>
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-2xl font-bold text-gray-900">Emotional Arc</h2>
+                    <div class="text-right">
+                        <div class="text-sm text-gray-600">Arc Type</div>
+                        <div class="text-lg font-bold text-blue-700">{{ narrative_analysis.arc_type }}</div>
+                    </div>
                 </div>
 
                 {% if trajectory_chart %}
-                <div id="trajectory-chart"></div>
+                <div id="trajectory-chart" class="mb-4"></div>
                 {% endif %}
 
-                <div class="mt-4 grid grid-cols-2 gap-4 text-sm">
-                    <div class="bg-gray-50 p-3 rounded">
-                        <div class="text-gray-600">Climax Intensity</div>
-                        <div class="text-lg font-bold text-gray-900">{{ narrative_analysis.climax_intensity|floatformat:2 }}</div>
-                    </div>
-                    <div class="bg-gray-50 p-3 rounded">
-                        <div class="text-gray-600">Arc Position</div>
-                        <div class="text-lg font-bold text-gray-900">{{ narrative_analysis.climax_position|floatformat:0 }}%</div>
-                    </div>
-                </div>
-
-                <!-- Explanation of arc computation -->
-                <div class="mt-4 p-3 bg-gray-50 rounded border-l-4 border-gray-400">
-                    <p class="text-xs text-gray-700">
-                        <strong>📖 How we compute narrative arcs:</strong> We divide the book into 20 chunks and calculate total emotional intensity (sum of joy, fear, sadness, anger, surprise) for each chunk. The climax is the point of highest intensity.
+                <div class="bg-blue-50 rounded-lg p-4 border-l-4 border-blue-500">
+                    <p class="text-sm text-gray-700">
+                        <strong>📖 Reading the chart:</strong> The book is divided into 20 equal chunks. The blue area shows total emotional intensity (sum of all 8 emotions). The red star marks the climax - the point of highest emotional intensity.
                     </p>
-                    <p class="text-xs text-gray-700 mt-2">
-                        <strong>Three arc types:</strong>
-                    </p>
-                    <ul class="text-xs text-gray-600 mt-1 ml-4 space-y-1">
-                        <li>• <strong>In Medias Res</strong> (climax <30%): Starts at peak tension, then resolves</li>
-                        <li>• <strong>Classic Arc</strong> (climax 30-70%): Traditional rising action → climax → falling action</li>
-                        <li>• <strong>Slow Burn</strong> (climax >70%): Gradually builds to a climactic ending</li>
+                    <ul class="text-xs text-gray-600 mt-3 space-y-1">
+                        <li>• <strong>In Medias Res</strong> (climax <30%): Starts at peak, then resolves</li>
+                        <li>• <strong>Classic Arc</strong> (climax 30-70%): Rising → climax → falling</li>
+                        <li>• <strong>Slow Burn</strong> (climax >70%): Builds to climactic ending</li>
                     </ul>
                 </div>
             </div>
