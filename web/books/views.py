@@ -175,8 +175,7 @@ def home(request):
     """Home page with book search and filtering."""
     search_query = request.GET.get('q', '')
     genre_filter = request.GET.get('genre', '')
-    emotion_filter = request.GET.get('emotion', '')
-    sort_by = request.GET.get('sort', '-created_at')
+    sort_by = request.GET.get('sort', 'book_id')  # Default: book_id
 
     books = Book.objects.all()
 
@@ -190,8 +189,10 @@ def home(request):
     if genre_filter:
         books = books.filter(primary_genre__icontains=genre_filter)
 
-    if emotion_filter and emotion_filter in ['joy', 'sadness', 'anger', 'fear', 'surprise', 'trust', 'disgust', 'anticipation']:
-        sort_by = f'-avg_{emotion_filter}'
+    # Validate sort parameter (only allow book_id, author, title)
+    valid_sorts = ['book_id', 'author', 'title']
+    if sort_by not in valid_sorts:
+        sort_by = 'book_id'
 
     books = books.order_by(sort_by)
     paginator = Paginator(books, 24)
@@ -217,7 +218,6 @@ def home(request):
         'page_obj': page_obj,
         'search_query': search_query,
         'genre_filter': genre_filter,
-        'emotion_filter': emotion_filter,
         'sort_by': sort_by,
         'unique_genres': unique_genres,
         'stats': stats,

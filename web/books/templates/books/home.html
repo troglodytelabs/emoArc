@@ -67,19 +67,15 @@
                 {% endfor %}
             </select>
 
-            <select name="emotion"
+            <select name="sort"
                     class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
                     onchange="this.form.submit()">
-                <option value="">Sort by Emotion</option>
-                <option value="joy" {% if emotion_filter == 'joy' %}selected{% endif %}>Most Joyful</option>
-                <option value="sadness" {% if emotion_filter == 'sadness' %}selected{% endif %}>Most Sad</option>
-                <option value="fear" {% if emotion_filter == 'fear' %}selected{% endif %}>Most Fearful</option>
-                <option value="anger" {% if emotion_filter == 'anger' %}selected{% endif %}>Most Angry</option>
-                <option value="surprise" {% if emotion_filter == 'surprise' %}selected{% endif %}>Most Surprising</option>
-                <option value="trust" {% if emotion_filter == 'trust' %}selected{% endif %}>Most Trusting</option>
+                <option value="book_id" {% if sort_by == 'book_id' %}selected{% endif %}>Sort by Book ID</option>
+                <option value="author" {% if sort_by == 'author' %}selected{% endif %}>Sort by Author (A-Z)</option>
+                <option value="title" {% if sort_by == 'title' %}selected{% endif %}>Sort by Title (A-Z)</option>
             </select>
 
-            {% if genre_filter or emotion_filter %}
+            {% if genre_filter %}
             <a href="{% url 'books:home' %}?q={{ search_query }}"
                class="px-4 py-2 text-gray-600 hover:text-gray-900 border border-gray-300 rounded-lg">
                 Clear Filters
@@ -159,7 +155,7 @@
     <div class="mt-8 flex justify-center">
         <nav class="relative z-0 inline-flex rounded-md shadow-sm -space-x-px">
             {% if page_obj.has_previous %}
-            <a href="?page={{ page_obj.previous_page_number }}&q={{ search_query }}&genre={{ genre_filter }}&emotion={{ emotion_filter }}"
+            <a href="?page={{ page_obj.previous_page_number }}&q={{ search_query }}&genre={{ genre_filter }}&sort={{ sort_by }}"
                class="relative inline-flex items-center px-4 py-2 border border-gray-300 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50">
                 Previous
             </a>
@@ -170,7 +166,7 @@
             </span>
 
             {% if page_obj.has_next %}
-            <a href="?page={{ page_obj.next_page_number }}&q={{ search_query }}&genre={{ genre_filter }}&emotion={{ emotion_filter }}"
+            <a href="?page={{ page_obj.next_page_number }}&q={{ search_query }}&genre={{ genre_filter }}&sort={{ sort_by }}"
                class="relative inline-flex items-center px-4 py-2 border border-gray-300 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50">
                 Next
             </a>
