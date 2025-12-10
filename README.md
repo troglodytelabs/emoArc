@@ -8,7 +8,7 @@ A Spark-based big data analytics project that analyzes emotion trajectories in P
 
 **EmoArc** processes 75,000+ books from Project Gutenberg to:
 
-1. **Segment** texts into percentage-based chunks (default: 50 chunks per book)
+1. **Segment** texts into percentage-based chunks (default: 20 chunks per book, 5% each)
 2. **Preprocess** text (remove stopwords, stemming, lemmatization)
 3. **Score** each chunk using NRC Emotion Lexicon (8 Plutchik emotions) and NRC VAD Lexicon (Valence, Arousal, Dominance)
 4. **Analyze** emotion trajectories to identify peaks, dominant emotions, and patterns
@@ -56,10 +56,11 @@ uv sync
 2. Download Data (NRC Lexicons & Gutenberg Books):
 
    Place the following files in the `data/` directory:
-      - `NRC-Emotion-Lexicon-Wordlevel-v0.92.txt` - Download from [NRC Emotion Lexicon](http://saifmohammad.com/WebPages/NRC-Emotion-Lexicon.htm)
-      - `NRC-VAD-Lexicon-v2.1.txt` - Download from [NRC VAD Lexicon](http://saifmohammad.com/WebPages/nrc-vad.html)
-      - `books` directory - Download from [Kaggle](https://www.kaggle.com/datasets/lokeshparab/gutenberg-books-and-metadata-2025?select=books)
-      - `gutenberg_metadata.csv` - Download from [Kaggle](https://www.kaggle.com/datasets/lokeshparab/gutenberg-books-and-metadata-2025?select=books)
+
+   - `NRC-Emotion-Lexicon-Wordlevel-v0.92.txt` - Download from [NRC Emotion Lexicon](http://saifmohammad.com/WebPages/NRC-Emotion-Lexicon.htm)
+   - `NRC-VAD-Lexicon-v2.1.txt` - Download from [NRC VAD Lexicon](http://saifmohammad.com/WebPages/nrc-vad.html)
+   - `books` directory - Download from [Kaggle](https://www.kaggle.com/datasets/lokeshparab/gutenberg-books-and-metadata-2025?select=books)
+   - `gutenberg_metadata.csv` - Download from [Kaggle](https://www.kaggle.com/datasets/lokeshparab/gutenberg-books-and-metadata-2025?select=books)
 
    These files are not included in the repository.
 
@@ -189,10 +190,15 @@ This will open a web browser at `http://localhost:8501` with an interactive inte
 - `--metadata`: Path to metadata CSV (default: `data/gutenberg_metadata.csv`)
 - `--emotion-lexicon`: Path to NRC Emotion Lexicon
 - `--vad-lexicon`: Path to NRC VAD Lexicon
-- `--num-chunks`: Number of chunks per book for percentage-based chunking (default: 50)
+- `--num-chunks`: Number of chunks per book for percentage-based chunking (default: 20)
 - `--limit`: Limit number of books to process (for testing)
 - `--output`: Output directory for results (default: `output`)
 - `--language`: Filter books by language (default: `en`)
+- `--mode`: Run mode - `local` or `cluster` (default: `local`)
+- `--driver-memory`: Driver memory (default: `8g`)
+- `--executor-memory`: Executor memory (default: `8g`)
+- `--skip-embeddings`: Skip Word2Vec embeddings computation
+- `--skip-topics`: Skip LDA topic modeling
 
 **demo.py options:**
 
@@ -209,13 +215,114 @@ This will open a web browser at `http://localhost:8501` with an interactive inte
 - Automatically uses `output/` directory for trajectories
 - Supports all input methods through the UI
 
+## Running on AWS EMR
+
+This section describes how to run EmoArc on Amazon EMR for large-scale processing.
+
+### Prerequisites
+
+- AWS account with EMR permissions
+- AWS CLI configured (`aws configure`)
+- S3 bucket for data and code
+
+### Step 1: Prepare S3 Bucket
+
+Upload your data, code, and create a bootstrap script for dependencies:
+
+```bash
+# Create S3 bucket (if needed)
+aws s3 mb s3://your-bucket-name
+
+# Upload data files
+aws s3 sync data/ s3://your-bucket-name/data/
+
+# Package source code as zip (required for PySpark to find modules)
+cd src && zip -r ../src.zip . && cd ..
+
+# Upload main.py and src.zip
+aws s3 cp main.py s3://your-bucket-name/
+aws s3 cp src.zip s3://your-bucket-name/
+
+# Upload bootstrap script
+aws s3 cp bootstrap.sh s3://your-bucket-name/
+```
+
+### Step 2: Create EMR Cluster
+
+Create an EMR cluster with Spark and the bootstrap action to install dependencies:
+
+```bash
+aws emr create-cluster \
+  --name "EmoArc Cluster" \
+  --release-label emr-7.12.0 \
+  --applications Name=Spark \
+  --instance-type m5.xlarge \
+  --instance-count 3 \
+  --use-default-roles \
+  --ec2-attributes KeyName=your-key-pair \
+  --log-uri s3://your-bucket-name/logs/ \
+  --bootstrap-actions Path=s3://your-bucket-name/bootstrap.sh,Name="Install Dependencies"
+```
+
+### Step 3: Submit Spark Job
+
+Submit via AWS CLI (note the `--py-files` to include source modules):
+
+```bash
+aws emr add-steps \
+  --cluster-id j-XXXXXXXXXXXXX \
+  --steps 'Type=Spark,Name=EmoArc Pipeline,ActionOnFailure=CONTINUE,Args=[--deploy-mode,cluster,--py-files,s3://your-bucket-name/src.zip,s3://your-bucket-name/main.py,--books-dir,s3://your-bucket-name/data/books,--metadata,s3://your-bucket-name/data/gutenberg_metadata.csv,--emotion-lexicon,s3://your-bucket-name/data/NRC-Emotion-Lexicon-Wordlevel-v0.92.txt,--vad-lexicon,s3://your-bucket-name/data/NRC-VAD-Lexicon-v2.1.txt,--output,s3://your-bucket-name/output,--mode,cluster]'
+```
+
+### Step 4: Monitor Job Progress
+
+```bash
+# Check step status
+aws emr describe-step --cluster-id j-XXXXXXXXXXXXX --step-id s-XXXXXXXXXXXXX
+
+# View logs
+aws s3 ls s3://your-bucket-name/logs/j-XXXXXXXXXXXXX/steps/
+
+# Or use EMR console: https://console.aws.amazon.com/emr
+```
+
+### Step 5: Download Results
+
+```bash
+# Download output from S3
+aws s3 sync s3://your-bucket-name/output/ ./output/
+```
+
+### Troubleshooting
+
+**Out of Memory errors:**
+
+- Use larger instance types (r5.2xlarge or r5.4xlarge)
+- Or override memory: `--driver-memory 16g --executor-memory 16g`
+- Reduce parallelism: `--conf spark.sql.shuffle.partitions=200`
+
+**Missing Python packages:**
+
+- Ensure bootstrap script ran successfully (check bootstrap logs in S3)
+- SSH to a worker node and verify: `pip3 list | grep numpy`
+
+**Python version mismatch:**
+
+- Set PYSPARK_PYTHON: `--conf spark.pyspark.python=/usr/bin/python3`
+- Ensure consistent Python versions across cluster
+
+**S3 access issues:**
+
+- Verify IAM roles have S3 read/write permissions
+- Check bucket policy allows EMR access
+
 ## How It Works
 
 The system processes books through a pipeline that extracts emotional features and compares them to find similar books.
 
 ### 1. Text Segmentation
 
-- Books are split into percentage-based chunks (default: 50 chunks per book)
+- Books are split into percentage-based chunks (default: 20 chunks per book, 5% each)
 - Each chunk is assigned a sequential index
 
 ### 2. Preprocessing
@@ -239,23 +346,25 @@ For each book, we compute aggregated statistics that capture the emotional traje
 
 **Emotion Statistics (per book):**
 
-- **Peak emotions**: Maximum value for each of the 8 Plutchik emotions across all chunks
-  - `max_anger`, `max_anticipation`, `max_disgust`, `max_fear`, `max_joy`, `max_sadness`, `max_surprise`, `max_trust`
 - **Average emotions**: Mean value for each emotion across all chunks
   - `avg_anger`, `avg_anticipation`, `avg_disgust`, `avg_fear`, `avg_joy`, `avg_sadness`, `avg_surprise`, `avg_trust`
+- **Emotion ratios**: Proportion of each emotion relative to total (for normalized comparison)
+  - `ratio_anger`, `ratio_anticipation`, etc.
 - **VAD statistics**:
   - Mean: `avg_valence`, `avg_arousal`, `avg_dominance`
-  - Standard deviation: `valence_std`, `arousal_std` (captures variability in emotional tone)
 - **Trajectory features**:
-  - `num_chunks`: Total number of chunks in the book
-  - `emotion_trajectory`: Array of emotion scores per chunk (stored in memory, not saved to CSV)
+  - `num_chunks`: Total number of chunks in the book (always 20)
+  - `emotion_trajectory`: Array of emotion scores per chunk for trajectory comparison
+- **Enhanced features** (optional):
+  - `book_embedding`: Word2Vec-based semantic embedding (100 dimensions)
+  - `book_topics`: LDA topic distribution (10 topics by default)
 
 **Why these features?**
 
-- **Peaks** identify the most intense emotional moments
 - **Averages** capture the overall emotional tone
-- **Standard deviations** measure emotional variability (steady vs. dramatic arcs)
-- Together, they create a "fingerprint" of the book's emotional journey
+- **Ratios** enable cross-book comparison regardless of book length
+- **Trajectories** track how emotions evolve through the narrative
+- **Embeddings and topics** provide semantic similarity beyond just emotions
 
 ### 5. Recommendation System
 
@@ -295,10 +404,9 @@ The recommendation system finds books with similar emotional trajectories using 
 
 The pipeline generates:
 
-1. **chunk_scores/**: CSV files with emotion and VAD scores per chunk
-2. **trajectories/**: CSV files with aggregated trajectory statistics per book
-3. **demo_output/**: Visualization plots and recommendation CSVs (from demo.py)
-4. **Streamlit app**: Interactive web interface for analysis and recommendations (from app.py)
+1. **trajectories/**: Parquet files with aggregated trajectory statistics per book (emotion scores, VAD, embeddings, topics)
+2. **demo_output/**: Visualization plots and recommendation CSVs (from demo.py)
+3. **Streamlit app**: Interactive web interface for analysis and recommendations (from app.py)
 
 ## Example Output
 
