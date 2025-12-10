@@ -29,6 +29,7 @@ from topic_modeling import (
     get_chunk_topics,
     compute_book_topics,
 )
+from model_persistence import save_models, load_models
 
 
 def create_spark_session(app_name: str = "EmoArc", mode: str = "local"):
@@ -200,6 +201,7 @@ def process_batch(
             models["word2vec"] = train_word2vec(
                 spark, chunks_df, vector_size=args.vector_size, min_count=5
             )
+            models["_word2vec_trained_this_run"] = True
 
         chunk_embeddings = compute_chunk_embeddings(
             spark, chunks_df, models["word2vec"]
@@ -224,6 +226,7 @@ def process_batch(
                 spark, feature_df, num_topics=args.num_topics, max_iter=50
             )
             models["lda"] = lda_model
+            models["_lda_trained_this_run"] = True
         else:
             # Transform using existing CV model
             word_sequences = chunks_df.select("book_id", "chunk_index", col("words"))
@@ -338,6 +341,13 @@ def main():
         default=None,
         help="Process books in batches of this size to avoid OOM",
     )
+    parser.add_argument(
+        "--no-resume",
+        dest="resume",
+        action="store_false",
+        help="Start fresh, overwriting existing data (default: resume if data exists)",
+    )
+    parser.set_defaults(resume=True)
 
     args = parser.parse_args()
 
@@ -401,11 +411,50 @@ def main():
 
         print(f"  ✓ Found {len(all_book_ids)} books to process (shuffled)")
 
+        # Check for resume capability
+        batch_size = args.batch_size if args.batch_size else len(all_book_ids)
+        start_batch = 0
+
+        if args.resume:
+            # Check which batches already exist
+            trajectories_path = f"{args.output}/trajectories"
+            if os.path.exists(trajectories_path):
+                try:
+                    existing_df = spark.read.parquet(trajectories_path)
+                    existing_ids = set(
+                        row["book_id"]
+                        for row in existing_df.select("book_id").collect()
+                    )
+
+                    # Find which batches are complete
+                    for i in range(0, len(all_book_ids), batch_size):
+                        batch_ids = set(all_book_ids[i : i + batch_size])
+                        if batch_ids.issubset(existing_ids):
+                            start_batch = (i // batch_size) + 1
+                        else:
+                            break
+
+                    if start_batch > 0:
+                        print(
+                            f"  ✓ Resuming from batch {start_batch + 1} ({start_batch * batch_size} books already processed)"
+                        )
+                except Exception as e:
+                    print(f"  ⚠ Could not check existing data: {e}. Starting fresh.")
+                    start_batch = 0
+
         # Process in batches
         models = {}
-        batch_size = args.batch_size if args.batch_size else len(all_book_ids)
 
-        for i in range(0, len(all_book_ids), batch_size):
+        # Load existing models if resuming
+        if args.resume and start_batch > 0:
+            print("\n[Resume] Loading previously trained models...")
+            models = load_models(args.output)
+            if not models:
+                print(
+                    "  ⚠ No saved models found. Models will be retrained on first batch."
+                )
+
+        for i in range(start_batch * batch_size, len(all_book_ids), batch_size):
             batch_ids = all_book_ids[i : i + batch_size]
             batch_index = i // batch_size
 
@@ -413,21 +462,48 @@ def main():
                 spark, batch_ids, batch_index, args, emotion_df, vad_df, models, timings
             )
 
+            # Save models after first batch (when they're trained)
+            if models.get("_word2vec_trained_this_run") or models.get(
+                "_lda_trained_this_run"
+            ):
+                print("\n[Models] Saving trained models for resume capability...")
+                save_models(models, args.output)
+                # Clear the flags so we don't save again
+                models.pop("_word2vec_trained_this_run", None)
+                models.pop("_lda_trained_this_run", None)
+
+            # Save timings after each batch (in case of crash)
+            timings["last_completed_batch"] = batch_index
+            timings["elapsed"] = time.time() - pipeline_start
+            timings_file = os.path.join(args.output, "timings.json")
+            with open(timings_file, "w") as f:
+                json.dump(
+                    {
+                        "timestamp": datetime.now().isoformat(),
+                        "stages": {
+                            k: round(v, 2) if isinstance(v, float) else v
+                            for k, v in timings.items()
+                        },
+                    },
+                    f,
+                    indent=2,
+                )
+
         # Calculate total time
         timings["total"] = time.time() - pipeline_start
 
-        # Show sample results (read from disk since we processed in batches)
-        print("\n" + "=" * 80)
-        print("Sample Results:")
-        print("=" * 80)
-        try:
-            trajectories = spark.read.parquet(f"{args.output}/trajectories")
-            print("\nTop 10 books by average joy:")
-            trajectories.orderBy(col("avg_joy").desc()).select(
-                "book_id", "title", "author", "avg_joy", "avg_sadness", "avg_valence"
-            ).show(10, truncate=False)
-        except Exception as e:
-            print(f"Could not read results for sample display: {e}")
+        # # Show sample results (read from disk since we processed in batches)
+        # print("\n" + "=" * 80)
+        # print("Sample Results:")
+        # print("=" * 80)
+        # try:
+        #     trajectories = spark.read.parquet(f"{args.output}/trajectories")
+        #     print("\nTop 10 books by average joy:")
+        #     trajectories.orderBy(col("avg_joy").desc()).select(
+        #         "book_id", "title", "author", "avg_joy", "avg_sadness", "avg_valence"
+        #     ).show(10, truncate=False)
+        # except Exception as e:
+        #     print(f"Could not read results for sample display: {e}")
 
         # Print timing summary
         print("\n" + "=" * 80)
