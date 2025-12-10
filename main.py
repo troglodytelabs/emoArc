@@ -155,6 +155,11 @@ def main():
         help="Skip topic modeling",
     )
     parser.add_argument(
+        "--skip-vad",
+        action="store_true",
+        help="Skip VAD (Valence-Arousal-Dominance) scoring",
+    )
+    parser.add_argument(
         "--mode",
         type=str,
         choices=["local", "cluster"],
@@ -183,9 +188,14 @@ def main():
         # Step 1: Load lexicons
         print("\n[Step 1/8] Loading lexicons...")
         emotion_df = load_emotion_lexicon(spark, args.emotion_lexicon)
-        vad_df = load_vad_lexicon(spark, args.vad_lexicon)
         print(f"  ✓ Loaded {emotion_df.count()} emotion word-emotion pairs")
-        print(f"  ✓ Loaded {vad_df.count()} VAD terms")
+
+        if not args.skip_vad:
+            vad_df = load_vad_lexicon(spark, args.vad_lexicon)
+            print(f"  ✓ Loaded {vad_df.count()} VAD terms")
+        else:
+            vad_df = None
+            print(f"  ⊘ Skipping VAD lexicon (--skip-vad)")
 
         # Step 2: Load books
         print("\n[Step 2/8] Loading books...")
@@ -218,16 +228,20 @@ def main():
         emotion_scores = score_chunks_with_emotions(spark, chunks_df, emotion_df)
         print(f"  ✓ Scored {emotion_scores.count()} chunks with emotions")
 
-        # Step 5: Score chunks with VAD
-        print("\n[Step 5/8] Scoring chunks with VAD...")
-        vad_scores = score_chunks_with_vad(spark, chunks_df, vad_df)
-        print(f"  ✓ Scored {vad_scores.count()} chunks with VAD")
+        # Step 5: Score chunks with VAD (optional)
+        if not args.skip_vad:
+            print("\n[Step 5/8] Scoring chunks with VAD...")
+            vad_scores = score_chunks_with_vad(spark, chunks_df, vad_df)
+            print(f"  ✓ Scored {vad_scores.count()} chunks with VAD")
+
+            # Combine scores
+            chunk_scores = combine_emotion_vad_scores(emotion_scores, vad_scores)
+        else:
+            print("\n[Step 5/8] Skipping VAD scoring (--skip-vad)")
+            chunk_scores = emotion_scores
 
         # Unpersist chunks_df now that we have scores (saves memory)
         chunks_df.unpersist()
-
-        # Combine scores
-        chunk_scores = combine_emotion_vad_scores(emotion_scores, vad_scores)
 
         # Step 6: Analyze trajectories
         print("\n[Step 6/8] Analyzing emotion trajectories...")
