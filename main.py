@@ -2,96 +2,51 @@
 Main pipeline for emotion trajectory analysis.
 """
 
-import sys
 import os
+import sys
+
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col
 
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
-from lexicon_loader import load_emotion_lexicon, load_vad_lexicon
-from text_preprocessor import load_books, create_chunks_df
 from emotion_scorer import (
+    combine_emotion_vad_scores,
     score_chunks_with_emotions,
     score_chunks_with_vad,
-    combine_emotion_vad_scores,
+)
+from lexicon_loader import load_emotion_lexicon, load_vad_lexicon
+from text_preprocessor import create_chunks_df, load_books
+from topic_modeling import (
+    compute_book_topics,
+    get_chunk_topics,
+    prepare_topic_features,
+    train_lda,
+    train_per_book_lda,
 )
 from trajectory_analyzer import analyze_trajectory
 from word_embeddings import (
-    train_word2vec,
-    compute_chunk_embeddings,
     compute_book_embedding,
-)
-from topic_modeling import (
-    prepare_topic_features,
-    train_lda,
-    get_chunk_topics,
-    compute_book_topics,
+    compute_chunk_embeddings,
+    train_word2vec,
 )
 
 
-def create_spark_session(app_name: str = "EmoArc", mode: str = "local"):
-    """
-    Create Spark session with appropriate configuration.
-
-    Args:
-        app_name: Application name
-        mode: Execution mode - "local" or "cluster"
-            - "local": Higher memory settings, more partitions, Arrow disabled
-            - "cluster": Uses cluster defaults, adaptive partitions
-
-    Returns:
-        Configured SparkSession
-    """
-    import os
-
-    mode = mode.lower()
-    if mode not in ["local", "cluster"]:
-        raise ValueError(f"Mode must be 'local' or 'cluster', got '{mode}'")
-
-    is_local = mode == "local"
-
-    # Get memory settings from environment or use adaptive defaults
-    if is_local:
-        # Local mode: Need explicit memory settings (Spark defaults are too low)
-        driver_memory = os.environ.get("SPARK_DRIVER_MEMORY", "4g")
-        executor_memory = os.environ.get("SPARK_EXECUTOR_MEMORY", "4g")
-        max_result_size = os.environ.get("SPARK_MAX_RESULT_SIZE", "2g")
-        shuffle_partitions = int(os.environ.get("SPARK_SHUFFLE_PARTITIONS", "200"))
-        # Disable Arrow in local mode to save memory
-        arrow_enabled = os.environ.get("SPARK_ARROW_ENABLED", "false").lower() == "true"
-    else:
-        # Cluster mode: Let Spark/EMR use defaults or cluster settings
-        # Only override if explicitly set
-        driver_memory = os.environ.get("SPARK_DRIVER_MEMORY", None)
-        executor_memory = os.environ.get("SPARK_EXECUTOR_MEMORY", None)
-        max_result_size = os.environ.get("SPARK_MAX_RESULT_SIZE", None)
-        # For clusters, partitions should be based on cluster size (1-2x vCores)
-        # Let Spark adaptive execution handle it, or set based on cluster
-        shuffle_partitions = int(os.environ.get("SPARK_SHUFFLE_PARTITIONS", "200"))
-        # Arrow can be enabled on clusters (better performance, more memory available)
-        arrow_enabled = os.environ.get("SPARK_ARROW_ENABLED", "true").lower() == "true"
-
-    # Build Spark session
-    builder = SparkSession.builder.appName(app_name)
-
-    # Always enable adaptive execution (works in both local and cluster)
-    builder = builder.config("spark.sql.adaptive.enabled", "true")
-    builder = builder.config("spark.sql.adaptive.coalescePartitions.enabled", "true")
-
-    # Memory settings (only set if provided or in local mode)
-    if driver_memory:
-        builder = builder.config("spark.driver.memory", driver_memory)
-    if executor_memory:
-        builder = builder.config("spark.executor.memory", executor_memory)
-    if max_result_size:
-        builder = builder.config("spark.driver.maxResultSize", max_result_size)
-
-    # Arrow: Enable on clusters, disable on local for memory savings
-    builder = builder.config(
-        "spark.sql.execution.arrow.pyspark.enabled", str(arrow_enabled).lower()
+def create_spark_session(app_name: str = "EmoArc"):
+    """Create Spark session with appropriate configuration."""
+    spark = (
+        SparkSession.builder.appName(app_name)
+        .config("spark.sql.adaptive.enabled", "true")
+        .config("spark.sql.adaptive.coalescePartitions.enabled", "true")
+        .config("spark.driver.memory", "4g")
+        .config("spark.executor.memory", "4g")
+        .config("spark.driver.maxResultSize", "2g")
+        .getOrCreate()
     )
+
+    spark.sparkContext.setLogLevel("WARN")
+    return spark
 
     # Shuffle partitions: Set explicitly (adaptive execution will optimize)
     # For clusters, this should ideally be 1-2x number of vCores
@@ -144,16 +99,16 @@ def main():
         help="Path to NRC VAD Lexicon",
     )
     parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=10000,
+        help="Chunk size in characters (ignored if --num-chunks is set)",
+    )
+    parser.add_argument(
         "--num-chunks",
         type=int,
         default=20,
-        help="Target number of chunks per book (percentage-based chunking, default: 20)",
-    )
-    parser.add_argument(
-        "--max-chunk-size",
-        type=int,
-        default=10000,
-        help="Maximum characters per chunk to prevent memory issues (default: 10000)",
+        help="Number of chunks per book for percentage-based chunking (default: 20). Set to 0 to use --chunk-size instead",
     )
     parser.add_argument(
         "--limit",
@@ -200,6 +155,11 @@ def main():
         help="Skip topic modeling",
     )
     parser.add_argument(
+        "--skip-vad",
+        action="store_true",
+        help="Skip VAD (Valence-Arousal-Dominance) scoring",
+    )
+    parser.add_argument(
         "--mode",
         type=str,
         choices=["local", "cluster"],
@@ -222,15 +182,20 @@ def main():
         os.environ["SPARK_EXECUTOR_MEMORY"] = args.executor_memory
 
     # Create Spark session with specified mode
-    spark = create_spark_session(mode=args.mode)
+    spark = create_spark_session()
 
     try:
         # Step 1: Load lexicons
         print("\n[Step 1/8] Loading lexicons...")
         emotion_df = load_emotion_lexicon(spark, args.emotion_lexicon)
-        vad_df = load_vad_lexicon(spark, args.vad_lexicon)
         print(f"  ✓ Loaded {emotion_df.count()} emotion word-emotion pairs")
-        print(f"  ✓ Loaded {vad_df.count()} VAD terms")
+
+        if not args.skip_vad:
+            vad_df = load_vad_lexicon(spark, args.vad_lexicon)
+            print(f"  ✓ Loaded {vad_df.count()} VAD terms")
+        else:
+            vad_df = None
+            print(f"  ⊘ Skipping VAD lexicon (--skip-vad)")
 
         # Step 2: Load books
         print("\n[Step 2/8] Loading books...")
@@ -245,32 +210,38 @@ def main():
 
         # Step 3: Create chunks
         print("\n[Step 3/8] Creating text chunks...")
-        chunks_df = create_chunks_df(
-            spark,
-            books_df,
-            num_chunks=args.num_chunks,
-            max_chunk_size=args.max_chunk_size,
-        )
-        # Cache chunks_df to avoid recomputation during count
-        chunks_df.cache()
-        chunk_count = chunks_df.count()
-        print(f"  ✓ Created chunks (total rows: {chunk_count})")
+        # use percentage-based chunking if num_chunks > 0, otherwise use fixed size
+        if args.num_chunks > 0:
+            print(
+                f"  Using percentage-based chunking: {args.num_chunks} chunks per book"
+            )
+            chunks_df = create_chunks_df(spark, books_df, num_chunks=args.num_chunks)
+        else:
+            print(
+                f"  Using fixed-size chunking: {args.chunk_size} characters per chunk"
+            )
+            chunks_df = create_chunks_df(spark, books_df, chunk_size=args.chunk_size)
+        print(f"  ✓ Created chunks (total rows: {chunks_df.count()})")
 
         # Step 4: Score chunks with emotions
         print("\n[Step 4/8] Scoring chunks with emotions...")
         emotion_scores = score_chunks_with_emotions(spark, chunks_df, emotion_df)
         print(f"  ✓ Scored {emotion_scores.count()} chunks with emotions")
 
-        # Step 5: Score chunks with VAD
-        print("\n[Step 5/8] Scoring chunks with VAD...")
-        vad_scores = score_chunks_with_vad(spark, chunks_df, vad_df)
-        print(f"  ✓ Scored {vad_scores.count()} chunks with VAD")
+        # Step 5: Score chunks with VAD (optional)
+        if not args.skip_vad:
+            print("\n[Step 5/8] Scoring chunks with VAD...")
+            vad_scores = score_chunks_with_vad(spark, chunks_df, vad_df)
+            print(f"  ✓ Scored {vad_scores.count()} chunks with VAD")
+
+            # Combine scores
+            chunk_scores = combine_emotion_vad_scores(emotion_scores, vad_scores)
+        else:
+            print("\n[Step 5/8] Skipping VAD scoring (--skip-vad)")
+            chunk_scores = emotion_scores
 
         # Unpersist chunks_df now that we have scores (saves memory)
         chunks_df.unpersist()
-
-        # Combine scores
-        chunk_scores = combine_emotion_vad_scores(emotion_scores, vad_scores)
 
         # Step 6: Analyze trajectories
         print("\n[Step 6/8] Analyzing emotion trajectories...")
@@ -291,7 +262,7 @@ def main():
                 spark,
                 books_df,
                 num_chunks=args.num_chunks,
-                max_chunk_size=args.max_chunk_size,
+                chunk_size=args.chunk_size,
             )
             print("  Training Word2Vec model...")
             word2vec_model = train_word2vec(
@@ -320,47 +291,26 @@ def main():
         else:
             print("\n[Step 7/8] Skipping word embeddings (--skip-embeddings)")
 
-        # Step 8: Compute topic distributions
+        # Step 8: Compute per-book topic models
         book_topics = None
         if not args.skip_topics:
-            print("\n[Step 8/8] Computing topic distributions...")
-            # Reload chunks_df for topic modeling
-            print("  Recreating chunks for topic modeling...")
-            chunks_df_topics = create_chunks_df(
+            print("\n[Step 8/8] Computing per-book topic models...")
+            print(
+                f"  Training separate LDA model for each book ({args.num_topics} topics per book)..."
+            )
+
+            # train per-book LDA (each book gets its own topic model)
+            book_topics = train_per_book_lda(
                 spark,
-                books_df,
-                num_chunks=args.num_chunks,
-                max_chunk_size=args.max_chunk_size,
+                chunks_df,
+                num_topics=min(args.num_topics, 5),  # cap at 5 topics per book
+                vocab_size=1000,
+                min_df=1,
+                max_iter=20,
             )
-            print("  Preparing topic features...")
-            feature_df, cv_model = prepare_topic_features(
-                spark, chunks_df_topics, vocab_size=5000, min_df=2
-            )
-            # Cache feature_df to avoid recomputation
-            feature_df.cache()
-            print("  ✓ Features prepared")
 
-            print(f"  Training LDA model with {args.num_topics} topics...")
-            lda_model = train_lda(
-                spark, feature_df, num_topics=args.num_topics, max_iter=50
-            )
-            print("  ✓ LDA model trained")
-
-            print("  Computing chunk topics...")
-            chunk_topics = get_chunk_topics(spark, feature_df, lda_model)
-            chunk_topics.cache()
-            chunk_topic_count = chunk_topics.count()
-            print(f"  ✓ Computed topics for {chunk_topic_count} chunks")
-
-            print("  Computing book-level topics...")
-            book_topics = compute_book_topics(spark, chunk_topics)
             topic_count = book_topics.count()
-            print(f"  ✓ Computed topics for {topic_count} books")
-
-            # Unpersist cached data
-            feature_df.unpersist()
-            chunk_topics.unpersist()
-            chunks_df_topics.unpersist()
+            print(f"  ✓ Computed per-book topics for {topic_count} books")
         else:
             print("\n[Step 8/8] Skipping topic modeling (--skip-topics)")
 
@@ -379,26 +329,198 @@ def main():
             )
             print("  Some books may have had no chunks or processing errors.")
 
+        # calculate emotional volatility from trajectory before dropping it
+        # volatility = standard deviation of total emotional intensity across chunks
+        if "emotion_trajectory" in trajectories.columns:
+            print("  Calculating emotional volatility...")
+            from pyspark.sql.functions import explode, udf
+            from pyspark.sql.types import (
+                ArrayType,
+                FloatType,
+                StringType,
+                StructField,
+                StructType,
+            )
+
+            # udf to calculate volatility from emotion trajectory array
+            def calculate_volatility(trajectory):
+                """
+                calculate emotional volatility as std dev of total intensity across chunks
+                trajectory format: [[chunk_idx, anger, anticipation, disgust, fear, joy, sadness, surprise, trust], ...]
+                """
+                if not trajectory or len(trajectory) == 0:
+                    return 0.0
+                try:
+                    # sum all emotions for each chunk (indices 1-8)
+                    intensities = [sum(chunk[1:9]) for chunk in trajectory]
+                    if len(intensities) < 2:
+                        return 0.0
+                    # calculate standard deviation
+                    mean_intensity = sum(intensities) / len(intensities)
+                    variance = sum(
+                        (x - mean_intensity) ** 2 for x in intensities
+                    ) / len(intensities)
+                    return float(variance**0.5)
+                except Exception:
+                    return 0.0
+
+            volatility_udf = udf(calculate_volatility, FloatType())
+            trajectories = trajectories.withColumn(
+                "emotional_volatility", volatility_udf(col("emotion_trajectory"))
+            )
+            print("  ✓ Emotional volatility calculated")
+
+            # convert emotion_trajectory to JSON string for CSV storage
+            # this preserves the data so django can load and display arc charts
+            print("  Converting emotion trajectories to JSON...")
+
+            def trajectory_to_json(trajectory):
+                """
+                convert trajectory array to json string, then base64 encode to avoid csv issues
+                format: base64([{"anger": 12.3, "joy": 15.4, ...}, {"anger": 11.2, ...}, ...])
+                """
+                if not trajectory or len(trajectory) == 0:
+                    return ""
+                try:
+                    import base64
+                    import json
+
+                    emotion_names = [
+                        "anger",
+                        "anticipation",
+                        "disgust",
+                        "fear",
+                        "joy",
+                        "sadness",
+                        "surprise",
+                        "trust",
+                    ]
+                    chunks = []
+                    for chunk_data in trajectory:
+                        # chunk_data = [chunk_idx, anger, anticipation, ..., trust]
+                        chunk_dict = {}
+                        for i, emotion in enumerate(emotion_names):
+                            chunk_dict[emotion] = float(
+                                chunk_data[i + 1]
+                            )  # +1 to skip chunk_idx
+                        chunks.append(chunk_dict)
+                    json_str = json.dumps(chunks)
+                    # base64 encode to avoid CSV quoting/escaping issues
+                    return base64.b64encode(json_str.encode("utf-8")).decode("utf-8")
+                except Exception:
+                    return ""
+
+            trajectory_json_udf = udf(trajectory_to_json, StringType())
+            trajectories = trajectories.withColumn(
+                "emotion_trajectory_json",
+                trajectory_json_udf(col("emotion_trajectory")),
+            )
+            print("  ✓ Emotion trajectories converted to JSON")
+
+        # flatten per-book topics to CSV-compatible columns
+        if book_topics is not None and "book_topics" in trajectories.columns:
+            print("  Flattening per-book topics for CSV export...")
+            from pyspark.sql.functions import udf
+            from pyspark.sql.types import FloatType, IntegerType, StringType
+
+            # extract top 3 topics from per-book topic arrays
+            # book_topics format: [[words for topic 0], [words for topic 1], ...]
+            def get_topic_words(topics, rank=0):
+                """get comma-separated words for nth topic"""
+                if not topics or len(topics) == 0:
+                    return ""
+                if rank >= len(topics):
+                    return ""
+                words = topics[rank]
+                return ",".join(words[:5]) if words else ""  # top 5 words per topic
+
+            # for per-book LDA, we assign equal probability (1/num_topics) to each topic
+            # or we can use a simple heuristic based on topic position (earlier = more important)
+            def get_topic_prob(topics, rank=0):
+                """assign probability based on topic rank (exponential decay)"""
+                if not topics or len(topics) == 0:
+                    return 0.0
+                if rank >= len(topics):
+                    return 0.0
+                # exponential decay: first topic gets highest probability
+                # normalize so all probs sum to ~1.0
+                num_topics = len(topics)
+                decay_factor = 0.6  # each subsequent topic gets 60% of previous
+                weights = [decay_factor**i for i in range(num_topics)]
+                total_weight = sum(weights)
+                normalized_prob = (
+                    weights[rank] / total_weight
+                    if total_weight > 0
+                    else 1.0 / num_topics
+                )
+                return float(normalized_prob)
+
+            # register udfs for top 3 topics
+            topic_1_words_udf = udf(lambda t: get_topic_words(t, 0), StringType())
+            topic_1_prob_udf = udf(lambda t: get_topic_prob(t, 0), FloatType())
+
+            topic_2_words_udf = udf(lambda t: get_topic_words(t, 1), StringType())
+            topic_2_prob_udf = udf(lambda t: get_topic_prob(t, 1), FloatType())
+
+            topic_3_words_udf = udf(lambda t: get_topic_words(t, 2), StringType())
+            topic_3_prob_udf = udf(lambda t: get_topic_prob(t, 2), FloatType())
+
+            # add flattened topic columns
+            # topic_id is just the rank (0, 1, 2) since these are per-book topics
+            trajectories = (
+                trajectories.withColumn(
+                    "top_topic_1",
+                    udf(lambda t: 0 if t and len(t) > 0 else -1, IntegerType())(
+                        col("book_topics")
+                    ),
+                )
+                .withColumn("top_topic_1_prob", topic_1_prob_udf(col("book_topics")))
+                .withColumn("top_topic_1_words", topic_1_words_udf(col("book_topics")))
+                .withColumn(
+                    "top_topic_2",
+                    udf(lambda t: 1 if t and len(t) > 1 else -1, IntegerType())(
+                        col("book_topics")
+                    ),
+                )
+                .withColumn("top_topic_2_prob", topic_2_prob_udf(col("book_topics")))
+                .withColumn("top_topic_2_words", topic_2_words_udf(col("book_topics")))
+                .withColumn(
+                    "top_topic_3",
+                    udf(lambda t: 2 if t and len(t) > 2 else -1, IntegerType())(
+                        col("book_topics")
+                    ),
+                )
+                .withColumn("top_topic_3_prob", topic_3_prob_udf(col("book_topics")))
+                .withColumn("top_topic_3_words", topic_3_words_udf(col("book_topics")))
+            )
+            print("  ✓ Per-book topics flattened with word labels")
+
         # Save results
         print(f"\n[Saving] Writing results to {args.output}/...")
         os.makedirs(args.output, exist_ok=True)
 
-        chunk_scores.coalesce(1).write.mode("overwrite").option("header", "true").csv(
-            f"{args.output}/chunk_scores"
-        )
+        # Save chunk scores (text columns already dropped during preprocessing)
+        chunk_scores.repartition(4).write.mode("overwrite").option(
+            "header", "true"
+        ).csv(f"{args.output}/chunk_scores")
+        print("  ✓ Chunk scores saved")
 
-        # Remove array columns (not supported by CSV)
-        # These can be recomputed if needed
+        # Remove array columns and text from trajectories (not supported by CSV)
         columns_to_drop = ["emotion_trajectory"]
         if "book_embedding" in trajectories.columns:
             columns_to_drop.append("book_embedding")
         if "book_topics" in trajectories.columns:
-            columns_to_drop.append("book_topics")
+            columns_to_drop.append(
+                "book_topics"
+            )  # drop original array, keep flattened columns
+        if "text" in trajectories.columns:
+            columns_to_drop.append("text")
 
         trajectories_for_csv = trajectories.drop(*columns_to_drop)
         trajectories_for_csv.coalesce(1).write.mode("overwrite").option(
             "header", "true"
         ).csv(f"{args.output}/trajectories")
+        print("  ✓ Trajectories saved")
 
         print("  ✓ Results saved successfully!")
 

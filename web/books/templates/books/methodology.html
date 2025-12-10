@@ -1,0 +1,549 @@
+{% extends 'books/base.html' %}
+
+{% block title %}Methodology - EmoArc{% endblock %}
+
+{% block extra_head %}
+<script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+<script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+<style>
+    .formula {
+        background: #f9fafb;
+        border-left: 4px solid #8b5cf6;
+        padding: 1rem;
+        margin: 1rem 0;
+        overflow-x: auto;
+    }
+    code {
+        background: #f3f4f6;
+        padding: 0.2rem 0.4rem;
+        border-radius: 0.25rem;
+        font-size: 0.9em;
+    }
+    pre {
+        background: #1e293b;
+        color: #ffffff;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        overflow-x: auto;
+        line-height: 1.6;
+    }
+    pre code {
+        background: transparent;
+        color: #e2e8f0;
+        padding: 0;
+        font-size: 0.95em;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+    <h1 class="text-5xl font-bold text-gray-900 mb-4">Technical Methodology</h1>
+    <p class="text-xl text-gray-600 mb-12">Complete mathematical and algorithmic documentation of EmoArc's emotion analysis pipeline</p>
+
+    <!-- Table of Contents -->
+    <div class="bg-gradient-to-r from-purple-50 to-pink-50 rounded-lg p-6 mb-12">
+        <h2 class="text-2xl font-bold text-gray-900 mb-4">Contents</h2>
+        <ol class="list-decimal list-inside space-y-2 text-gray-700">
+            <li><a href="#preprocessing" class="text-purple-600 hover:text-purple-800">Text Preprocessing & Chunking Algorithm</a></li>
+            <li><a href="#nrc-emotion" class="text-purple-600 hover:text-purple-800">NRC Emotion Lexicon & Scoring Methodology</a></li>
+            <li><a href="#vad" class="text-purple-600 hover:text-purple-800">VAD (Valence-Arousal-Dominance) Model</a></li>
+            <li><a href="#dyads" class="text-purple-600 hover:text-purple-800">Plutchik's Emotional Dyads</a></li>
+            <li><a href="#trajectory" class="text-purple-600 hover:text-purple-800">Emotion Trajectory Analysis</a></li>
+            <li><a href="#lda" class="text-purple-600 hover:text-purple-800">Latent Dirichlet Allocation (LDA) Topic Modeling</a></li>
+            <li><a href="#similarity" class="text-purple-600 hover:text-purple-800">Emotional Similarity & Distance Metrics</a></li>
+            <li><a href="#percentile" class="text-purple-600 hover:text-purple-800">Percentile Ranking System</a></li>
+            <li><a href="#arc-detection" class="text-purple-600 hover:text-purple-800">Narrative Arc Detection Algorithm</a></li>
+            <li><a href="#limitations" class="text-purple-600 hover:text-purple-800">Limitations & Future Work</a></li>
+        </ol>
+    </div>
+
+    <!-- Section 1: Preprocessing -->
+    <section id="preprocessing" class="mb-16">
+        <h2 class="text-3xl font-bold text-gray-900 mb-6 border-b-4 border-purple-500 pb-2">1. Text Preprocessing & Chunking</h2>
+
+        <h3 class="text-2xl font-semibold text-gray-900 mb-4">1.1 Percentage-Based Chunking Algorithm</h3>
+        <p class="text-gray-700 mb-4">
+            Unlike fixed word-count chunking, we use <strong>percentage-based chunking</strong> to ensure fair comparison across books of varying lengths.
+        </p>
+
+        <div class="formula">
+            <p class="font-semibold mb-2">Given:</p>
+            <ul class="list-disc list-inside mb-4">
+                <li>\( T = \) total text length (characters)</li>
+                <li>\( N = 20 \) (number of chunks)</li>
+                <li>\( i \in [0, N-1] \) (chunk index)</li>
+            </ul>
+            <p class="font-semibold mb-2">Chunk boundaries:</p>
+            <p class="mb-2">\( \text{start}_i = \lfloor \frac{i \cdot T}{N} \rfloor \)</p>
+            <p>\( \text{end}_i = \lfloor \frac{(i+1) \cdot T}{N} \rfloor \)</p>
+            <p class="mt-4">\( \text{chunk}_i = T[\text{start}_i : \text{end}_i] \)</p>
+        </div>
+
+        <h3 class="text-2xl font-semibold text-gray-900 mb-4 mt-6">1.2 Text Normalization Pipeline</h3>
+        <pre class="text-sm"><code>function preprocess_text(text):
+    // 1. Remove Gutenberg headers/footers
+    text = remove_pattern(text, r"\*\*\* START.*?\*\*\*")
+    text = remove_pattern(text, r"\*\*\* END.*?\*\*\*")
+
+    // 2. Lowercase normalization
+    text = text.lower()
+
+    // 3. Remove special characters (keep apostrophes)
+    text = regex_sub(r"[^a-z0-9\s']", " ", text)
+
+    // 4. Handle contractions
+    text = expand_contractions(text)  // isn't → is not
+
+    // 5. Tokenization
+    tokens = text.split()
+
+    // 6. Remove stopwords
+    stopwords = load_nltk_stopwords("english")
+    tokens = [w for w in tokens if w not in stopwords and len(w) > 2]
+
+    return tokens
+</code></pre>
+
+        <div class="bg-blue-50 border-l-4 border-blue-500 p-4 mt-4">
+            <p class="text-sm text-blue-900">
+                <strong>Why percentage-based?</strong> A 100,000-word novel and a 50,000-word novella both get 20 chunks,
+                allowing us to compare narrative arc positions (e.g., "climax at 70%") across all books.
+            </p>
+        </div>
+    </section>
+
+    <!-- Section 2: NRC Emotion -->
+    <section id="nrc-emotion" class="mb-16">
+        <h2 class="text-3xl font-bold text-gray-900 mb-6 border-b-4 border-blue-500 pb-2">2. NRC Emotion Lexicon</h2>
+
+        <h3 class="text-2xl font-semibold text-gray-900 mb-4">2.1 Lexicon Structure</h3>
+        <p class="text-gray-700 mb-4">
+            The <strong>NRC Word-Emotion Association Lexicon</strong> (Mohammad & Turney, 2013) contains 14,182 words
+            annotated with associations to Plutchik's 8 basic emotions via crowdsourcing.
+        </p>
+
+        <div class="bg-gray-50 rounded-lg p-4 mb-4">
+            <h4 class="font-semibold mb-2">Lexicon Entry Format:</h4>
+            <pre class="text-sm bg-gray-800 text-green-400 p-3 rounded"><code>word    emotion    association
+happy   joy        1
+happy   sadness    0
+happy   trust      1
+...
+sad     joy        0
+sad     sadness    1
+</code></pre>
+        </div>
+
+        <h3 class="text-2xl font-semibold text-gray-900 mb-4">2.2 Normalized Density Scoring (CRITICAL)</h3>
+        <div class="bg-gradient-to-r from-yellow-50 to-orange-50 border-2 border-orange-400 rounded-lg p-6 mb-6">
+            <p class="font-bold text-orange-900 mb-3 text-lg">🔥 Why Normalization Matters</p>
+            <p class="text-orange-800 mb-2">
+                Raw emotion word counts are <strong>meaningless for comparison</strong>. "The Complete Works of William Shakespeare"
+                (500k+ words) would have 10x higher raw counts than a 50k-word novel, making comparisons impossible.
+            </p>
+            <p class="text-orange-800">
+                <strong>Solution:</strong> We use <em>density-based scoring</em> — emotion words <strong>per 1000 words</strong> —
+                so books of any length can be fairly compared.
+            </p>
+        </div>
+
+        <div class="formula">
+            <p class="mb-4"><strong>Step 1:</strong> Count raw emotion words in chunk \( c_i \):</p>
+            <p class="mb-2">\( \text{count}(c_i, e) = \sum_{w \in c_i} \mathbb{1}[\text{Lexicon}(w, e) = 1] \)</p>
+            <p class="text-sm text-gray-600 mb-4">
+                where \( \mathbb{1}[\cdot] \) is the indicator function (1 if true, 0 if false)
+            </p>
+
+            <p class="mb-4"><strong>Step 2:</strong> Normalize by chunk word count to get density:</p>
+            <p class="mb-2">\( \text{density}(c_i, e) = \frac{\text{count}(c_i, e)}{|c_i|} \times 1000 \)</p>
+            <p class="text-sm text-gray-600 mb-4">
+                where \( |c_i| \) is the total word count in chunk \( i \) (after preprocessing)
+            </p>
+
+            <p class="mb-4"><strong>Step 3:</strong> Book-level score (average density across all chunks):</p>
+            <p>\( \text{emotion\_score}(e) = \frac{1}{N} \sum_{i=0}^{N-1} \text{density}(c_i, e) \)</p>
+        </div>
+
+        <div class="bg-green-50 border-l-4 border-green-500 p-4 mt-4">
+            <p class="text-sm text-green-900 mb-2">
+                <strong>✓ Interpretation:</strong> A score of 12.5 for "joy" means on average, there are
+                <strong>12.5 joy-associated words per 1000 words</strong> throughout the book.
+            </p>
+            <p class="text-sm text-green-900">
+                This is comparable across all books: a 20k-word novella and a 500k-word collection now have
+                scores on the same scale (both measuring emotional <em>density</em>, not volume).
+            </p>
+        </div>
+
+        <h3 class="text-2xl font-semibold text-gray-900 mb-4 mt-6">2.3 Plutchik's Wheel of Emotions</h3>
+        <p class="text-gray-700 mb-4">
+            Robert Plutchik's psychoevolutionary theory posits 8 primary emotions arranged in opposing pairs:
+        </p>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+            <div class="border-2 border-yellow-500 rounded p-3 text-center">
+                <div class="font-bold text-yellow-700">Joy</div>
+                <div class="text-xs text-gray-600">↔ Sadness</div>
+            </div>
+            <div class="border-2 border-green-500 rounded p-3 text-center">
+                <div class="font-bold text-green-700">Trust</div>
+                <div class="text-xs text-gray-600">↔ Disgust</div>
+            </div>
+            <div class="border-2 border-red-500 rounded p-3 text-center">
+                <div class="font-bold text-red-700">Fear</div>
+                <div class="text-xs text-gray-600">↔ Anger</div>
+            </div>
+            <div class="border-2 border-purple-500 rounded p-3 text-center">
+                <div class="font-bold text-purple-700">Surprise</div>
+                <div class="text-xs text-gray-600">↔ Anticipation</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Section 3: VAD -->
+    <section id="vad" class="mb-16">
+        <h2 class="text-3xl font-bold text-gray-900 mb-6 border-b-4 border-green-500 pb-2">3. VAD Model</h2>
+
+        <h3 class="text-2xl font-semibold text-gray-900 mb-4">3.1 Theoretical Foundation</h3>
+        <p class="text-gray-700 mb-4">
+            The <strong>Valence-Arousal-Dominance (VAD)</strong> model (Mehrabian & Russell, 1974; Bradley & Lang, 1999)
+            represents emotions as points in a 3-dimensional space:
+        </p>
+
+        <div class="formula">
+            <p>\( \text{VAD}(w) = (v, a, d) \in [0, 1]^3 \)</p>
+            <p class="text-sm text-gray-600 mt-2">where:</p>
+            <ul class="list-disc list-inside mt-2 text-sm space-y-1">
+                <li>\( v \) = Valence (pleasure/displeasure): 0 = very negative, 1 = very positive</li>
+                <li>\( a \) = Arousal (activation): 0 = very calm, 1 = very excited</li>
+                <li>\( d \) = Dominance (control): 0 = very submissive, 1 = very dominant</li>
+            </ul>
+        </div>
+
+        <h3 class="text-2xl font-semibold text-gray-900 mb-4 mt-6">3.2 VAD Scoring</h3>
+        <p class="text-gray-700 mb-4">
+            The NRC-VAD Lexicon (Mohammad, 2018) provides VAD ratings for 20,007 English words.
+        </p>
+
+        <div class="formula">
+            <p class="mb-4">For chunk \( c_i \) with words \( W = \{w_1, w_2, ..., w_k\} \):</p>
+            <p class="mb-2">\( v_{c_i} = \frac{1}{|W|} \sum_{w \in W} \text{VAD}_v(w) \)</p>
+            <p class="mb-2">\( a_{c_i} = \frac{1}{|W|} \sum_{w \in W} \text{VAD}_a(w) \)</p>
+            <p>\( d_{c_i} = \frac{1}{|W|} \sum_{w \in W} \text{VAD}_d(w) \)</p>
+
+            <p class="mt-6 mb-4">Book-level VAD (average across chunks):</p>
+            <p>\( \text{VAD}_{\text{book}} = \frac{1}{N} \sum_{i=0}^{N-1} (v_{c_i}, a_{c_i}, d_{c_i}) \)</p>
+        </div>
+
+        <h3 class="text-2xl font-semibold text-gray-900 mb-4 mt-6">3.3 Semantic Interpretation</h3>
+        <div class="bg-gradient-to-r from-green-50 to-blue-50 rounded-lg p-6">
+            <h4 class="font-bold mb-3">Example VAD Coordinates:</h4>
+            <div class="space-y-3">
+                <div class="flex justify-between items-center">
+                    <span class="font-medium">"Ecstatic":</span>
+                    <code class="bg-white px-3 py-1 rounded">(v=0.95, a=0.92, d=0.75)</code>
+                    <span class="text-sm text-gray-600">High pleasure, high arousal, high control</span>
+                </div>
+                <div class="flex justify-between items-center">
+                    <span class="font-medium">"Terrified":</span>
+                    <code class="bg-white px-3 py-1 rounded">(v=0.15, a=0.88, d=0.22)</code>
+                    <span class="text-sm text-gray-600">Low pleasure, high arousal, low control</span>
+                </div>
+                <div class="flex justify-between items-center">
+                    <span class="font-medium">"Calm":</span>
+                    <code class="bg-white px-3 py-1 rounded">(v=0.68, a=0.28, d=0.62)</code>
+                    <span class="text-sm text-gray-600">Medium pleasure, low arousal, medium control</span>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Section 4: Dyads -->
+    <section id="dyads" class="mb-16">
+        <h2 class="text-3xl font-bold text-gray-900 mb-6 border-b-4 border-pink-500 pb-2">4. Plutchik's Emotional Dyads</h2>
+
+        <h3 class="text-2xl font-semibold text-gray-900 mb-4">4.1 Primary Dyads</h3>
+        <p class="text-gray-700 mb-4">
+            Dyads are complex emotions formed by combining two basic emotions:
+        </p>
+
+        <div class="formula">
+            <p class="mb-4">General dyad formula:</p>
+            <p>\( \text{dyad}(e_1, e_2) = \frac{\text{score}(e_1) + \text{score}(e_2)}{2} \)</p>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
+            <div class="border-2 border-purple-300 rounded-lg p-4 bg-purple-50">
+                <h4 class="font-bold text-purple-900 mb-2">Primary Dyads (Adjacent on Wheel)</h4>
+                <ul class="space-y-1 text-sm">
+                    <li>💜 <strong>Love</strong> = Joy + Trust</li>
+                    <li>🤝 <strong>Submission</strong> = Trust + Fear</li>
+                    <li>😱 <strong>Alarm</strong> = Fear + Surprise</li>
+                    <li>😞 <strong>Disappointment</strong> = Surprise + Sadness</li>
+                    <li>😔 <strong>Remorse</strong> = Sadness + Disgust</li>
+                    <li>🤮 <strong>Contempt</strong> = Disgust + Anger</li>
+                    <li>😠 <strong>Aggressiveness</strong> = Anger + Anticipation</li>
+                    <li>😊 <strong>Optimism</strong> = Anticipation + Joy</li>
+                </ul>
+            </div>
+
+            <div class="border-2 border-blue-300 rounded-lg p-4 bg-blue-50">
+                <h4 class="font-bold text-blue-900 mb-2">Secondary Dyads (Skip 1)</h4>
+                <ul class="space-y-1 text-sm">
+                    <li>😰 <strong>Guilt</strong> = Joy + Fear</li>
+                    <li>🤔 <strong>Curiosity</strong> = Trust + Surprise</li>
+                    <li>😭 <strong>Despair</strong> = Fear + Sadness</li>
+                    <li>🙄 <strong>Unbelief</strong> = Surprise + Disgust</li>
+                    <li>😒 <strong>Envy</strong> = Sadness + Anger</li>
+                    <li>😏 <strong>Cynicism</strong> = Disgust + Anticipation</li>
+                    <li>💪 <strong>Pride</strong> = Anger + Joy</li>
+                    <li>🙏 <strong>Hope</strong> = Anticipation + Trust</li>
+                    <li>😟 <strong>Anxiety</strong> = Anticipation + Fear</li>
+                    <li>😤 <strong>Outrage</strong> = Surprise + Anger</li>
+                </ul>
+            </div>
+        </div>
+    </section>
+
+    <!-- Section 5: Trajectory Analysis -->
+    <section id="trajectory" class="mb-16">
+        <h2 class="text-3xl font-bold text-gray-900 mb-6 border-b-4 border-indigo-500 pb-2">5. Emotion Trajectory Analysis</h2>
+
+        <h3 class="text-2xl font-semibold text-gray-900 mb-4">5.1 Trajectory Construction</h3>
+        <p class="text-gray-700 mb-4">
+            An <strong>emotion trajectory</strong> is a time-series representation of emotional content:
+        </p>
+
+        <div class="formula">
+            <p class="mb-4">Trajectory matrix \( T \in \mathbb{R}^{N \times E} \):</p>
+            <p>\( T = \begin{bmatrix}
+                e_{0,1} & e_{0,2} & \cdots & e_{0,E} \\
+                e_{1,1} & e_{1,2} & \cdots & e_{1,E} \\
+                \vdots & \vdots & \ddots & \vdots \\
+                e_{N-1,1} & e_{N-1,2} & \cdots & e_{N-1,E}
+            \end{bmatrix} \)</p>
+            <p class="text-sm text-gray-600 mt-2">
+                where \( N = 20 \) chunks, \( E = 8 \) emotions, and \( e_{i,j} \) is the score for emotion \( j \) in chunk \( i \)
+            </p>
+        </div>
+
+        <h3 class="text-2xl font-semibold text-gray-900 mb-4 mt-6">5.2 Emotional Volatility</h3>
+        <div class="formula">
+            <p class="mb-4">Volatility measures the variance in emotional intensity:</p>
+            <p>\( \sigma_{\text{emotional}} = \text{std}\left(\sum_{e=1}^{E} T_{i,e}\right)_{i=0}^{N-1} \)</p>
+            <p class="text-sm text-gray-600 mt-2">
+                High volatility indicates dramatic emotional shifts; low volatility suggests steady tone.
+            </p>
+        </div>
+    </section>
+
+    <!-- Section 6: LDA -->
+    <section id="lda" class="mb-16">
+        <h2 class="text-3xl font-bold text-gray-900 mb-6 border-b-4 border-red-500 pb-2">6. Latent Dirichlet Allocation (LDA)</h2>
+
+        <h3 class="text-2xl font-semibold text-gray-900 mb-4">6.1 Mathematical Model</h3>
+        <p class="text-gray-700 mb-4">
+            LDA (Blei, Ng, & Jordan, 2003) is a generative probabilistic model for discovering latent topics in text collections.
+        </p>
+
+        <div class="formula">
+            <p class="font-semibold mb-3">Generative Process:</p>
+            <ol class="list-decimal list-inside space-y-2 text-sm">
+                <li>For each topic \( k \in [1, K] \): \( \phi_k \sim \text{Dir}(\beta) \) (word distribution)</li>
+                <li>For each document \( d \): \( \theta_d \sim \text{Dir}(\alpha) \) (topic distribution)</li>
+                <li>For each word \( w_n \) in document \( d \):
+                    <ul class="list-disc list-inside ml-6 mt-1">
+                        <li>Choose topic: \( z_n \sim \text{Multinomial}(\theta_d) \)</li>
+                        <li>Choose word: \( w_n \sim \text{Multinomial}(\phi_{z_n}) \)</li>
+                    </ul>
+                </li>
+            </ol>
+        </div>
+
+        <h3 class="text-2xl font-semibold text-gray-900 mb-4 mt-6">6.2 Implementation Parameters</h3>
+        <div class="bg-gray-50 rounded-lg p-6">
+            <h4 class="font-bold mb-3">Our Configuration:</h4>
+            <ul class="space-y-2">
+                <li><strong>Number of topics (K):</strong> 10</li>
+                <li><strong>Vocabulary size:</strong> 5,000 (most frequent words)</li>
+                <li><strong>Min document frequency:</strong> 2 (word must appear in ≥2 chunks)</li>
+                <li><strong>Alpha (α):</strong> 50/K (Dirichlet prior for topic distributions)</li>
+                <li><strong>Beta (β):</strong> 0.01 (Dirichlet prior for word distributions)</li>
+                <li><strong>Max iterations:</strong> 50</li>
+                <li><strong>Algorithm:</strong> Spark MLlib's LDA (online variational Bayes)</li>
+            </ul>
+        </div>
+
+        <h3 class="text-2xl font-semibold text-gray-900 mb-4 mt-6">6.3 Topic Interpretation</h3>
+        <pre class="text-sm"><code>function interpret_topics(lda_model, vocabulary):
+    topics = []
+    for k in range(K):
+        // Get top 5 words for this topic
+        word_weights = lda_model.describeTopics(5)
+        top_words = [vocabulary[idx] for idx in word_weights[k].indices]
+
+        // Infer semantic theme from word co-occurrence
+        theme = infer_theme(top_words)  // e.g., "war" if words include {battle, soldier, war, conflict}
+
+        topics.append({
+            'id': k,
+            'words': top_words,
+            'theme': theme
+        })
+    return topics
+</code></pre>
+    </section>
+
+    <!-- Section 7: Similarity -->
+    <section id="similarity" class="mb-16">
+        <h2 class="text-3xl font-bold text-gray-900 mb-6 border-b-4 border-yellow-500 pb-2">7. Emotional Similarity</h2>
+
+        <h3 class="text-2xl font-semibold text-gray-900 mb-4">7.1 Euclidean Distance</h3>
+        <div class="formula">
+            <p class="mb-4">For books \( A \) and \( B \) with emotion vectors \( \mathbf{e}_A, \mathbf{e}_B \in \mathbb{R}^8 \):</p>
+            <p>\( d(A, B) = \|\mathbf{e}_A - \mathbf{e}_B\|_2 = \sqrt{\sum_{i=1}^{8} (e_{A,i} - e_{B,i})^2} \)</p>
+            <p class="text-sm text-gray-600 mt-4">
+                Lower distance = more similar emotional profiles. We use this for recommendations.
+            </p>
+        </div>
+
+        <h3 class="text-2xl font-semibold text-gray-900 mb-4 mt-6">7.2 Similarity to Percentage</h3>
+        <div class="formula">
+            <p>\( \text{similarity}(A, B) = \max\left(0, 100 - \left(100 \times d(A, B)\right)\right) \)</p>
+            <p class="text-sm text-gray-600 mt-2">
+                Converts distance to 0-100% similarity score for intuitive display.
+            </p>
+        </div>
+    </section>
+
+    <!-- Section 8: Percentile -->
+    <section id="percentile" class="mb-16">
+        <h2 class="text-3xl font-bold text-gray-900 mb-6 border-b-4 border-teal-500 pb-2">8. Percentile Ranking</h2>
+
+        <h3 class="text-2xl font-semibold text-gray-900 mb-4">8.1 Calculation</h3>
+        <p class="text-gray-700 mb-4">
+            To make raw scores interpretable, we rank each book against the full database:
+        </p>
+
+        <div class="formula">
+            <p class="mb-4">For book \( B \) with emotion score \( s_B \) and database \( D = \{s_1, s_2, ..., s_n\} \):</p>
+            <p>\( \text{percentile}(B) = \frac{|\{s \in D : s \leq s_B\}|}{|D|} \times 100 \)</p>
+        </div>
+
+        <pre class="text-sm mt-6"><code>function calculate_percentile(value, all_values):
+    sorted_values = sort(all_values)
+    rank = count(v for v in sorted_values if v <= value)
+    return (rank / len(sorted_values)) * 100
+</code></pre>
+
+        <div class="bg-green-50 border-l-4 border-green-500 p-4 mt-4">
+            <p class="text-sm text-green-900">
+                <strong>✓ Example:</strong> If a book's joy score is at the 85th percentile, it's more joyful than 85% of all books in the database.
+                This provides meaningful context that "joy = 0.234" alone cannot.
+            </p>
+        </div>
+    </section>
+
+    <!-- Section 9: Arc Detection -->
+    <section id="arc-detection" class="mb-16">
+        <h2 class="text-3xl font-bold text-gray-900 mb-6 border-b-4 border-orange-500 pb-2">9. Narrative Arc Detection</h2>
+
+        <h3 class="text-2xl font-semibold text-gray-900 mb-4">9.1 Emotional Intensity Function</h3>
+        <div class="formula">
+            <p class="mb-4">Total emotional intensity for chunk \( i \):</p>
+            <p>\( I_i = \sum_{e \in \{\text{joy, fear, sadness, anger, surprise}\}} \text{score}_i(e) \)</p>
+        </div>
+
+        <h3 class="text-2xl font-semibold text-gray-900 mb-4 mt-6">9.2 Climax Detection</h3>
+        <div class="formula">
+            <p>\( i_{\text{climax}} = \arg\max_{i \in [0, N-1]} I_i \)</p>
+            <p class="text-sm text-gray-600 mt-2">The chunk with maximum emotional intensity</p>
+
+            <p class="mt-4">\( \text{climax\_position} = \frac{i_{\text{climax}}}{N} \times 100\% \)</p>
+        </div>
+
+        <h3 class="text-2xl font-semibold text-gray-900 mb-4 mt-6">9.3 Arc Type Classification</h3>
+        <pre class="text-sm"><code>function classify_arc(climax_position):
+    if climax_position < 30:
+        return "In Medias Res"  // Starts at high tension
+    else if climax_position > 70:
+        return "Slow Burn"      // Builds to climactic ending
+    else:
+        return "Classic Arc"    // Traditional rising → climax → falling
+</code></pre>
+    </section>
+
+    <!-- Section 10: Limitations -->
+    <section id="limitations" class="mb-16">
+        <h2 class="text-3xl font-bold text-gray-900 mb-6 border-b-4 border-gray-500 pb-2">10. Limitations & Future Work</h2>
+
+        <div class="space-y-6">
+            <div class="border-l-4 border-red-500 bg-red-50 p-4">
+                <h4 class="font-bold text-red-900 mb-2">⚠️ Word-Level Analysis</h4>
+                <p class="text-red-800 text-sm">
+                    We analyze individual words without considering sentence context, negation, or sarcasm.
+                    "not happy" is treated the same as "happy" because we count the word "happy" regardless of context.
+                </p>
+            </div>
+
+            <div class="border-l-4 border-yellow-500 bg-yellow-50 p-4">
+                <h4 class="font-bold text-yellow-900 mb-2">⚠️ Lexicon Coverage</h4>
+                <p class="text-yellow-800 text-sm">
+                    The NRC lexicon contains ~14K words. Rare words, neologisms, and domain-specific vocabulary are ignored.
+                    Coverage for Project Gutenberg texts (often older) may be lower than modern writing.
+                </p>
+            </div>
+
+            <div class="border-l-4 border-purple-500 bg-purple-50 p-4">
+                <h4 class="font-bold text-purple-900 mb-2">⚠️ English-Only</h4>
+                <p class="text-purple-800 text-sm">
+                    All lexicons are English-language. Non-English books and translations may have reduced accuracy.
+                </p>
+            </div>
+
+            <div class="border-l-4 border-blue-500 bg-blue-50 p-4">
+                <h4 class="font-bold text-blue-900 mb-2">🔮 Future Enhancements</h4>
+                <ul class="list-disc list-inside text-blue-800 text-sm space-y-1">
+                    <li>Transformer-based models (BERT, RoBERTa) for context-aware emotion detection</li>
+                    <li>Sentence-level analysis with negation handling</li>
+                    <li>Character emotion tracking (protagonist vs antagonist)</li>
+                    <li>Multi-language support with cross-lingual embeddings</li>
+                    <li>Dialogue vs narrative distinction</li>
+                </ul>
+            </div>
+        </div>
+    </section>
+
+    <!-- References -->
+    <section class="mb-16">
+        <h2 class="text-3xl font-bold text-gray-900 mb-6 border-b-4 border-gray-500 pb-2">References</h2>
+        <div class="space-y-3 text-sm text-gray-700">
+            <p>[1] Mohammad, S. M., & Turney, P. D. (2013). Crowdsourcing a word-emotion association lexicon. <em>Computational Intelligence</em>, 29(3), 436-465.</p>
+            <p>[2] Mohammad, S. M. (2018). Obtaining reliable human ratings of valence, arousal, and dominance for 20,000 English words. <em>ACL 2018</em>.</p>
+            <p>[3] Plutchik, R. (1980). <em>Emotion: A psychoevolutionary synthesis</em>. Harper & Row.</p>
+            <p>[4] Blei, D. M., Ng, A. Y., & Jordan, M. I. (2003). Latent Dirichlet allocation. <em>JMLR</em>, 3, 993-1022.</p>
+            <p>[5] Mehrabian, A., & Russell, J. A. (1974). <em>An approach to environmental psychology</em>. MIT Press.</p>
+            <p>[6] Bradley, M. M., & Lang, P. J. (1999). Affective norms for English words (ANEW). <em>Technical Report C-1</em>, University of Florida.</p>
+        </div>
+    </section>
+
+    <!-- Back to Top -->
+    <div class="text-center mt-12">
+        <a href="{% url 'books:home' %}"
+           class="inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700">
+            Explore the Library
+        </a>
+    </div>
+</div>
+
+<script>
+// Enable MathJax rendering
+window.MathJax = {
+    tex: {
+        inlineMath: [['$', '$'], ['\\(', '\\)']],
+        displayMath: [['$$', '$$'], ['\\[', '\\]']],
+        processEscapes: true
+    }
+};
+</script>
+{% endblock %}

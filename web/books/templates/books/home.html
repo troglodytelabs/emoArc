@@ -1,0 +1,200 @@
+{% extends 'books/base.html' %}
+
+{% block title %}Library - EmoArc{% endblock %}
+
+{% block content %}
+<!-- Hero Section -->
+<div class="gradient-bg">
+    <div class="max-w-7xl mx-auto py-16 px-4 sm:px-6 lg:px-8">
+        <div class="text-center">
+            <h1 class="text-4xl font-extrabold text-white sm:text-5xl sm:tracking-tight lg:text-6xl">
+                Explore Emotional Landscapes
+            </h1>
+            <p class="mt-4 max-w-2xl mx-auto text-xl text-indigo-100">
+                Discover books through the lens of emotion. Analyze sentiment, track narrative arcs, and find your next read based on emotional resonance.
+            </p>
+        </div>
+
+        <!-- Search Bar -->
+        <div class="mt-10 max-w-xl mx-auto">
+            <form method="get" action="{% url 'books:home' %}" class="flex gap-2">
+                <input type="text"
+                       name="q"
+                       value="{{ search_query }}"
+                       placeholder="Search by title, author, or book ID..."
+                       class="flex-1 px-4 py-3 rounded-lg border-0 shadow-sm focus:ring-2 focus:ring-white">
+                <button type="submit"
+                        class="px-6 py-3 bg-white text-purple-600 font-semibold rounded-lg shadow-sm hover:bg-gray-50 transition">
+                    Search
+                </button>
+            </form>
+        </div>
+
+        <!-- Stats -->
+        <div class="mt-10 grid grid-cols-2 gap-4 sm:grid-cols-4 max-w-4xl mx-auto">
+            <div class="bg-white bg-opacity-20 backdrop-blur-sm rounded-lg p-4 text-center">
+                <div class="text-3xl font-bold text-white">{{ total_books }}</div>
+                <div class="text-sm text-indigo-100">Books Analyzed</div>
+            </div>
+            <div class="bg-white bg-opacity-20 backdrop-blur-sm rounded-lg p-4 text-center">
+                <div class="text-3xl font-bold text-white">{{ avg_stats.avg_joy|floatformat:3 }}</div>
+                <div class="text-sm text-indigo-100">Avg Joy</div>
+            </div>
+            <div class="bg-white bg-opacity-20 backdrop-blur-sm rounded-lg p-4 text-center">
+                <div class="text-3xl font-bold text-white">{{ avg_stats.avg_sadness|floatformat:3 }}</div>
+                <div class="text-sm text-indigo-100">Avg Sadness</div>
+            </div>
+            <div class="bg-white bg-opacity-20 backdrop-blur-sm rounded-lg p-4 text-center">
+                <div class="text-3xl font-bold text-white">{{ avg_stats.avg_fear|floatformat:3 }}</div>
+                <div class="text-sm text-indigo-100">Avg Fear</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Filters -->
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <div class="bg-white rounded-lg shadow-sm p-4">
+        <form method="get" action="{% url 'books:home' %}" class="flex flex-wrap gap-4">
+            <input type="hidden" name="q" value="{{ search_query }}">
+
+            <select name="genre"
+                    class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                    onchange="this.form.submit()">
+                <option value="">All Genres</option>
+                {% for genre in unique_genres %}
+                <option value="{{ genre }}" {% if genre == genre_filter %}selected{% endif %}>{{ genre }}</option>
+                {% endfor %}
+            </select>
+
+            <select name="bookshelf"
+                    class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                    onchange="this.form.submit()">
+                <option value="">All Bookshelves</option>
+                {% for shelf in unique_bookshelves %}
+                <option value="{{ shelf }}" {% if shelf == bookshelf_filter %}selected{% endif %}>{{ shelf }}</option>
+                {% endfor %}
+            </select>
+
+            <select name="sort"
+                    class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                    onchange="this.form.submit()">
+                <option value="book_id" {% if sort_by == 'book_id' %}selected{% endif %}>Sort by Book ID</option>
+                <option value="author" {% if sort_by == 'author' %}selected{% endif %}>Sort by Author (A-Z)</option>
+                <option value="title" {% if sort_by == 'title' %}selected{% endif %}>Sort by Title (A-Z)</option>
+            </select>
+
+            {% if genre_filter or bookshelf_filter %}
+            <a href="{% url 'books:home' %}?q={{ search_query }}"
+               class="px-4 py-2 text-gray-600 hover:text-gray-900 border border-gray-300 rounded-lg">
+                Clear Filters
+            </a>
+            {% endif %}
+        </form>
+    </div>
+</div>
+
+<!-- Books Grid -->
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-12">
+    {% if page_obj %}
+    <div class="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        {% for book in page_obj %}
+        <div class="bg-white rounded-lg shadow-sm overflow-hidden card-hover cursor-pointer"
+             onclick="window.location.href='{% url 'books:book_detail' book.book_id %}'">
+            <div class="p-6">
+                <div class="flex justify-between items-start mb-3">
+                    <h3 class="text-lg font-semibold text-gray-900 line-clamp-2 flex-1">
+                        {{ book.title }}
+                    </h3>
+                </div>
+                <p class="text-sm text-gray-600 mb-4">{{ book.author }}</p>
+
+                {% if book.primary_genre %}
+                <span class="inline-block px-3 py-1 text-xs font-medium bg-purple-100 text-purple-800 rounded-full mb-4">
+                    {{ book.primary_genre }}
+                </span>
+                {% endif %}
+
+                <!-- Top Emotions -->
+                <div class="space-y-2">
+                    <div class="text-xs font-medium text-gray-500 uppercase">Top Emotions</div>
+                    {% for emotion, value in book.get_top_emotions %}
+                    <div class="flex justify-between items-center text-sm">
+                        <span class="capitalize text-gray-700">{{ emotion }}</span>
+                        <div class="flex items-center">
+                            <div class="w-24 h-2 bg-gray-200 rounded-full overflow-hidden mr-2">
+                                <div class="h-full bg-gradient-to-r from-purple-500 to-pink-500"
+                                     style="width: {{ value|floatformat:0 }}%"></div>
+                            </div>
+                            <span class="text-xs text-gray-500">{{ value|floatformat:3 }}</span>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+
+                <!-- Bookshelves -->
+                {% if book.bookshelves %}
+                <div class="mt-4 pt-4 border-t border-gray-100">
+                    <div class="text-xs font-medium text-gray-500 uppercase mb-2">Bookshelves</div>
+                    <div class="flex flex-wrap gap-1">
+                        {% for shelf in book.bookshelves|slice:":3" %}
+                        <span class="inline-block px-2 py-1 text-xs bg-indigo-100 text-indigo-800 rounded">
+                            {{ shelf }}
+                        </span>
+                        {% endfor %}
+                        {% if book.bookshelves|length > 3 %}
+                        <span class="inline-block px-2 py-1 text-xs text-gray-500">
+                            +{{ book.bookshelves|length|add:"-3" }} more
+                        </span>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+
+            <div class="px-6 py-3 bg-gray-50 border-t border-gray-100">
+                <a href="{% url 'books:book_detail' book.book_id %}"
+                   class="text-sm font-medium text-purple-600 hover:text-purple-800">
+                    View Full Analysis →
+                </a>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- Pagination -->
+    {% if page_obj.has_other_pages %}
+    <div class="mt-8 flex justify-center">
+        <nav class="relative z-0 inline-flex rounded-md shadow-sm -space-x-px">
+            {% if page_obj.has_previous %}
+            <a href="?page={{ page_obj.previous_page_number }}&q={{ search_query }}&genre={{ genre_filter }}&bookshelf={{ bookshelf_filter }}&sort={{ sort_by }}"
+               class="relative inline-flex items-center px-4 py-2 border border-gray-300 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50">
+                Previous
+            </a>
+            {% endif %}
+
+            <span class="relative inline-flex items-center px-4 py-2 border border-gray-300 bg-white text-sm font-medium text-gray-700">
+                Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}
+            </span>
+
+            {% if page_obj.has_next %}
+            <a href="?page={{ page_obj.next_page_number }}&q={{ search_query }}&genre={{ genre_filter }}&bookshelf={{ bookshelf_filter }}&sort={{ sort_by }}"
+               class="relative inline-flex items-center px-4 py-2 border border-gray-300 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50">
+                Next
+            </a>
+            {% endif %}
+        </nav>
+    </div>
+    {% endif %}
+
+    {% else %}
+    <div class="text-center py-12">
+        <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+        </svg>
+        <h3 class="mt-2 text-sm font-medium text-gray-900">No books found</h3>
+        <p class="mt-1 text-sm text-gray-500">Try adjusting your search or filters.</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

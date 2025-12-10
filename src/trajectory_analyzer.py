@@ -16,7 +16,46 @@ from pyspark.sql.functions import (
     count,
     when,
     sqrt as spark_sqrt,
+    udf,
 )
+from pyspark.sql.types import FloatType
+
+
+def calculate_climax_position_udf():
+    """Create UDF to calculate climax position from emotion trajectory."""
+    def calc_climax(trajectory):
+        """
+        Find the position of emotional climax in the narrative.
+
+        trajectory format: [[chunk_idx, anger, anticipation, disgust, fear, joy, sadness, surprise, trust], ...]
+        Returns: percentage (0-100) of where climax occurs in the narrative
+        """
+        if not trajectory or len(trajectory) == 0:
+            return 0.0
+
+        try:
+            # Calculate total intensity for each chunk (sum of all 8 emotions)
+            intensities = []
+            for chunk in trajectory:
+                if len(chunk) >= 9:  # Ensure we have all emotion values
+                    # chunk[0] is chunk_index, chunk[1:9] are the 8 emotions
+                    total_intensity = sum(chunk[1:9])
+                    intensities.append(total_intensity)
+
+            if not intensities:
+                return 0.0
+
+            # Find index of maximum intensity (climax)
+            climax_idx = intensities.index(max(intensities))
+
+            # Convert to percentage through narrative
+            climax_pct = (climax_idx / len(intensities)) * 100.0
+            return float(climax_pct)
+
+        except Exception:
+            return 0.0
+
+    return udf(calc_climax, FloatType())
 
 
 def analyze_trajectory(spark: SparkSession, chunk_scores_df):
@@ -32,7 +71,8 @@ def analyze_trajectory(spark: SparkSession, chunk_scores_df):
     """
     # Calculate trajectory statistics per book
     # Use all 8 Plutchik emotions: anger, anticipation, disgust, fear, joy, sadness, surprise, trust
-    book_trajectories = chunk_scores_df.groupBy("book_id", "title", "author").agg(
+    # Include bookshelves for genre-based filtering and recommendations
+    book_trajectories = chunk_scores_df.groupBy("book_id", "title", "author", "bookshelves").agg(
         # Emotion peaks (all 8 Plutchik emotions)
         spark_max("anger").alias("max_anger"),
         spark_max("anticipation").alias("max_anticipation"),
@@ -165,5 +205,11 @@ def analyze_trajectory(spark: SparkSession, chunk_scores_df):
                 col("total_emotion") > 0, col(f"avg_{emotion}") / col("total_emotion")
             ).otherwise(0.125),  # Default to equal distribution
         )
+
+    # Calculate climax position from emotion trajectory
+    climax_udf = calculate_climax_position_udf()
+    book_trajectories = book_trajectories.withColumn(
+        "climax_position", climax_udf(col("emotion_trajectory"))
+    )
 
     return book_trajectories

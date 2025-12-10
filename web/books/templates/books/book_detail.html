@@ -1,0 +1,266 @@
+{% extends 'books/base.html' %}
+{% load book_filters %}
+
+{% block title %}{{ book.title }} - EmoArc{% endblock %}
+
+{% block content %}
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <!-- Breadcrumb -->
+    <nav class="text-sm mb-6">
+        <a href="{% url 'books:home' %}" class="text-purple-600 hover:text-purple-800">Library</a>
+        <span class="mx-2 text-gray-400">/</span>
+        <span class="text-gray-600">{{ book.title|truncatewords:8 }}</span>
+    </nav>
+
+    <!-- Header with interpretation -->
+    <div class="bg-white rounded-lg shadow-sm p-8 mb-6">
+        <div class="flex justify-between items-start">
+            <div class="flex-1">
+                <h1 class="text-4xl font-bold text-gray-900 mb-2">{{ book.title }}</h1>
+                <p class="text-xl text-gray-600 mb-4">by {{ book.author }}</p>
+
+                <div class="flex flex-wrap items-center gap-2 mt-2">
+                    {% if book.primary_genre %}
+                    <span class="px-4 py-2 bg-purple-100 text-purple-800 rounded-full text-sm font-medium">
+                        {{ book.primary_genre }}
+                    </span>
+                    {% endif %}
+                    {% for shelf in book.bookshelves %}
+                    <span class="px-3 py-1 bg-indigo-100 text-indigo-800 rounded text-xs">
+                        {{ shelf }}
+                    </span>
+                    {% endfor %}
+                    <span class="text-sm text-gray-500">ID: {{ book.book_id }}</span>
+                </div>
+            </div>
+
+            <div class="ml-6">
+                <a href="{% url 'books:recommendations' book.book_id %}"
+                   class="inline-flex items-center px-6 py-3 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 transition">
+                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                    </svg>
+                    Get Recommendations
+                </a>
+            </div>
+        </div>
+
+        <!-- Key Narrative Metrics -->
+        <div class="mt-6 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg p-6 border-l-4 border-blue-500">
+            <h3 class="text-lg font-bold text-gray-900 mb-4">Narrative Dynamics</h3>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                    <div class="flex items-center justify-between mb-2">
+                        <span class="text-sm font-medium text-gray-700">Emotional Volatility</span>
+                        <span class="text-2xl font-bold text-blue-700">{{ book.emotional_volatility|floatformat:1 }}</span>
+                    </div>
+                    <div class="w-full bg-gray-200 rounded-full h-2 mb-2">
+                        <div class="bg-blue-600 h-2 rounded-full" style="width: {% if book.emotional_volatility > 100 %}100{% else %}{{ book.emotional_volatility }}{% endif %}%"></div>
+                    </div>
+                    <p class="text-xs text-gray-600">
+                        {% if book.emotional_volatility > 15 %}<strong>Highly Variable:</strong> Dramatic emotional shifts throughout{% elif book.emotional_volatility > 10 %}<strong>Variable:</strong> Moderate emotional fluctuations{% else %}<strong>Steady:</strong> Consistent emotional tone{% endif %}
+                    </p>
+                </div>
+                <div>
+                    <div class="flex items-center justify-between mb-2">
+                        <span class="text-sm font-medium text-gray-700">Narrative Climax</span>
+                        <span class="text-2xl font-bold text-indigo-700">{{ book.climax_position|floatformat:0 }}%</span>
+                    </div>
+                    <div class="w-full bg-gray-200 rounded-full h-2 mb-2">
+                        <div class="bg-indigo-600 h-2 rounded-full" style="width: {{ book.climax_position }}%"></div>
+                    </div>
+                    <p class="text-xs text-gray-600">
+                        Point of highest emotional intensity in the narrative
+                    </p>
+                </div>
+            </div>
+            <div class="mt-4 pt-4 border-t border-blue-200">
+                <p class="text-xs text-gray-600">
+                    <strong>💡 How it works:</strong> Volatility is the standard deviation of emotional intensity across 20 chunks (typical range: 0-100+). Higher = more dramatic shifts. Climax shows where peak emotion occurs in the story.
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <!-- Main Content -->
+        <div class="lg:col-span-2 space-y-6">
+            <!-- Narrative Arc -->
+            {% if narrative_analysis %}
+            <div class="bg-white rounded-lg shadow-sm p-6">
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-2xl font-bold text-gray-900">Emotional Arc</h2>
+                    <div class="text-right">
+                        <div class="text-sm text-gray-600">Arc Type</div>
+                        <div class="text-lg font-bold text-blue-700">{{ narrative_analysis.arc_type }}</div>
+                    </div>
+                </div>
+
+                {% if trajectory_chart %}
+                <div id="trajectory-chart" class="mb-4"></div>
+                {% endif %}
+
+                <div class="bg-blue-50 rounded-lg p-4 border-l-4 border-blue-500">
+                    <p class="text-sm text-gray-700">
+                        <strong>📖 Reading the chart:</strong> The book is divided into 20 equal chunks. All 8 Plutchik emotions (joy, trust, fear, surprise, sadness, disgust, anger, anticipation) are shown throughout the narrative. The blue area shows total emotional intensity. The red star marks the climax - the point of highest emotional intensity.
+                    </p>
+                    <ul class="text-xs text-gray-600 mt-3 space-y-1">
+                        <li>• <strong>In Medias Res</strong> (climax <30%): Starts at peak, then resolves</li>
+                        <li>• <strong>Classic Arc</strong> (climax 30-70%): Rising → climax → falling</li>
+                        <li>• <strong>Slow Burn</strong> (climax >70%): Builds to climactic ending</li>
+                        <li>• <strong>Toggle emotions:</strong> Click legend items to show/hide specific emotions</li>
+                    </ul>
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- Emotion Radar with Percentiles -->
+            <div class="bg-white rounded-lg shadow-sm p-6">
+                <h2 class="text-2xl font-bold text-gray-900 mb-2">Emotion Profile</h2>
+                <p class="text-sm text-gray-600 mb-4">
+                    Comparing this book's emotions to all books in the database
+                </p>
+                <div id="radar-chart"></div>
+
+                <div class="mt-6 space-y-3">
+                    <h3 class="font-semibold text-gray-900">Emotional Percentile Rankings:</h3>
+                    {% for emotion, percentile in emotion_percentiles.items %}
+                    <div class="flex items-center justify-between">
+                        <div class="flex-1">
+                            <div class="flex justify-between mb-1">
+                                <span class="text-sm font-medium capitalize text-gray-700">{{ emotion }}</span>
+                                <span class="text-sm text-gray-600">{{ percentile|floatformat:0 }}th percentile</span>
+                            </div>
+                            <div class="w-full bg-gray-200 rounded-full h-2">
+                                <div class="bg-gradient-to-r from-purple-500 to-pink-500 h-2 rounded-full"
+                                     style="width: {{ percentile }}%"></div>
+                            </div>
+                        </div>
+                        <div class="ml-4 text-right min-w-[200px]">
+                            <span class="text-xs text-gray-600 italic">{{ emotion_interpretations|get_item:emotion }}</span>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+
+                <div class="mt-4 bg-gray-50 rounded p-3 text-sm text-gray-600">
+                    <strong>How to read this:</strong> Percentile rankings show how this book compares to others.
+                    75th percentile means more emotional than 75% of books.
+                    <a href="{% url 'books:methodology' %}" class="text-purple-600 hover:text-purple-800 ml-1">Learn more →</a>
+                </div>
+            </div>
+        </div>
+
+        <!-- Sidebar -->
+        <div class="space-y-6">
+            <!-- Top Emotions -->
+            <div class="bg-white rounded-lg shadow-sm p-6">
+                <h2 class="text-lg font-bold text-gray-900 mb-4">Dominant Emotions</h2>
+                <div class="space-y-4">
+                    {% for emotion, value in top_emotions %}
+                    <div>
+                        <div class="flex justify-between mb-2">
+                            <span class="font-medium text-gray-900 capitalize">{{ emotion }}</span>
+                            <span class="text-sm text-gray-600">
+                                {{ value|floatformat:3 }}
+                                ({{ emotion_percentiles|get_item:emotion|floatformat:0 }}%)
+                            </span>
+                        </div>
+                        <div class="w-full bg-gray-200 rounded-full h-3">
+                            <div class="bg-gradient-to-r from-purple-500 to-pink-500 h-3 rounded-full transition-all"
+                                 style="width: {{ emotion_percentiles|get_item:emotion }}%"></div>
+                        </div>
+                        <div class="text-xs text-gray-500 mt-1 italic">
+                            {{ emotion_interpretations|get_item:emotion }}
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+
+                <div class="mt-4 p-3 bg-blue-50 rounded text-xs text-gray-700">
+                    <strong>💡 Tip:</strong> These percentages show how this book ranks compared to all books.
+                    Higher = more of this emotion than most books.
+                </div>
+            </div>
+
+            <!-- Complex Emotions (Dyads) -->
+            <div class="bg-white rounded-lg shadow-sm p-6">
+                <h2 class="text-lg font-bold text-gray-900 mb-2">Complex Emotions</h2>
+                <p class="text-xs text-gray-500 mb-3">Plutchik's emotional dyads (combinations)</p>
+                <div class="space-y-2">
+                    {% for dyad, value in top_dyads %}
+                    <div class="flex items-center justify-between p-2 hover:bg-gray-50 rounded transition">
+                        <span class="font-medium text-gray-800 capitalize text-sm">{{ dyad }}</span>
+                        <span class="text-xs bg-purple-100 text-purple-800 px-3 py-1 rounded-full font-medium">
+                            {{ value|floatformat:3 }}
+                        </span>
+                    </div>
+                    {% endfor %}
+                </div>
+                <a href="{% url 'books:methodology' %}#dyads"
+                   class="text-xs text-purple-600 hover:text-purple-800 mt-3 block">
+                    Learn about emotional dyads →
+                </a>
+            </div>
+
+            <!-- Similar Books -->
+            {% if similar_books %}
+            <div class="bg-white rounded-lg shadow-sm p-6">
+                <h2 class="text-lg font-bold text-gray-900 mb-2">Emotionally Similar</h2>
+                <p class="text-xs text-gray-500 mb-4">Books with similar emotional profiles</p>
+                <div class="space-y-3">
+                    {% for similar in similar_books %}
+                    <a href="{% url 'books:book_detail' similar.book_id %}"
+                       class="block p-3 rounded-lg hover:bg-gray-50 border border-gray-200 hover:border-purple-300 transition">
+                        <div class="font-medium text-sm text-gray-900 line-clamp-2 mb-1">{{ similar.title }}</div>
+                        <div class="text-xs text-gray-600">{{ similar.author }}</div>
+                        {% if similar.primary_genre %}
+                        <span class="inline-block mt-2 px-2 py-1 text-xs bg-purple-100 text-purple-800 rounded-full">
+                            {{ similar.primary_genre }}
+                        </span>
+                        {% endif %}
+                    </a>
+                    {% endfor %}
+                </div>
+                <a href="{% url 'books:recommendations' book.book_id %}"
+                   class="text-sm text-purple-600 hover:text-purple-800 mt-4 block text-center font-medium">
+                    View All Recommendations →
+                </a>
+            </div>
+            {% endif %}
+
+            <!-- Help -->
+            <div class="bg-gradient-to-br from-purple-50 to-pink-50 rounded-lg p-6 border-2 border-purple-200">
+                <h3 class="font-bold text-gray-900 mb-2">Understanding the Analysis</h3>
+                <p class="text-sm text-gray-700 mb-4">
+                    Confused by the scores? Our methodology page explains how we calculate emotions and what they mean.
+                </p>
+                <a href="{% url 'books:methodology' %}"
+                   class="inline-flex items-center text-sm font-medium text-purple-600 hover:text-purple-800">
+                    Read the Methodology
+                    <svg class="w-4 h-4 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path>
+                    </svg>
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Render Plotly charts
+    const radarChart = {{ radar_chart|safe }};
+    Plotly.newPlot('radar-chart', radarChart.data, radarChart.layout, {responsive: true, displayModeBar: false});
+
+    {% if trajectory_chart %}
+    const trajectoryChart = {{ trajectory_chart|safe }};
+    Plotly.newPlot('trajectory-chart', trajectoryChart.data, trajectoryChart.layout, {responsive: true, displayModeBar: false});
+    {% endif %}
+</script>
+
+<!-- Custom template filter for dict access -->
+{% load static %}
+<script>
+// Django template doesn't have a built-in get_item filter, so we'll access by index
+</script>
+{% endblock %}
