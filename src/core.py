@@ -5,7 +5,6 @@ Contains common functions for trajectory analysis, data loading, and processing.
 
 import os
 import re
-import glob
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
     col,
@@ -22,11 +21,7 @@ from pyspark.sql.types import StructType, StructField, StringType
 # Import processing modules
 from lexicon_loader import load_emotion_lexicon, load_vad_lexicon
 from text_preprocessor import create_chunks_df
-from emotion_scorer import (
-    score_chunks_with_emotions,
-    score_chunks_with_vad,
-    combine_emotion_vad_scores,
-)
+from emotion_scorer import score_chunks
 from trajectory_analyzer import analyze_trajectory
 from topic_modeling import (
     prepare_topic_features,
@@ -47,72 +42,34 @@ def create_spark_session(app_name: str = "EmoArc"):
     return spark
 
 
-def load_trajectories_with_types(spark, trajectories_path):
-    """Load trajectories CSV and cast columns to proper types."""
-    df = spark.read.option("header", "true").csv(trajectories_path)
+def load_trajectories(spark, output_dir="output"):
+    """
+    Load trajectories from Parquet.
 
-    numeric_cols = [
-        "max_anger",
-        "max_anticipation",
-        "max_disgust",
-        "max_fear",
-        "max_joy",
-        "max_sadness",
-        "max_surprise",
-        "max_trust",
-        "avg_anger",
-        "avg_anticipation",
-        "avg_disgust",
-        "avg_fear",
-        "avg_joy",
-        "avg_sadness",
-        "avg_surprise",
-        "avg_trust",
-        "avg_valence",
-        "avg_arousal",
-        "avg_dominance",
-        "valence_std",
-        "arousal_std",
-        "num_chunks",
-    ]
+    Trajectories contain all book-level features needed for recommendations:
+    - Emotion statistics (avg_*, ratio_*)
+    - VAD scores (valence, arousal, dominance)
+    - Emotion trajectory arrays
+    - Word embeddings (book_embedding)
+    - Topic distributions (book_topics)
 
-    for col_name in numeric_cols:
-        if col_name in df.columns:
-            df = df.withColumn(col_name, col(col_name).cast("double"))
+    Args:
+        spark: SparkSession
+        output_dir: Output directory from main.py
 
-    return df
+    Returns:
+        DataFrame with trajectory data, or None if not found
+    """
+    trajectories_path = f"{output_dir}/trajectories"
 
+    if os.path.exists(trajectories_path):
+        try:
+            df = spark.read.parquet(trajectories_path)
+            return df
+        except Exception as e:
+            print(f"  Warning: Could not load trajectories: {e}")
 
-def load_chunk_scores_with_types(spark, chunk_scores_path):
-    """Load chunk scores CSV and cast columns to proper types."""
-    df = spark.read.option("header", "true").csv(chunk_scores_path)
-
-    if "chunk_index" in df.columns:
-        df = df.withColumn("chunk_index", col("chunk_index").cast("int"))
-
-    emotion_cols = [
-        "anger",
-        "anticipation",
-        "disgust",
-        "fear",
-        "joy",
-        "negative",
-        "positive",
-        "sadness",
-        "surprise",
-        "trust",
-    ]
-
-    for col_name in emotion_cols:
-        if col_name in df.columns:
-            df = df.withColumn(col_name, col(col_name).cast("double"))
-
-    vad_cols = ["avg_valence", "avg_arousal", "avg_dominance", "vad_word_count"]
-    for col_name in vad_cols:
-        if col_name in df.columns:
-            df = df.withColumn(col_name, col(col_name).cast("double"))
-
-    return df
+    return None
 
 
 def load_metadata(spark, metadata_path="data/gutenberg_metadata.csv"):
@@ -205,13 +162,9 @@ def get_input_trajectory(
                 # For texts < 10k chars, use 10 chunks max
                 num_chunks = max(5, min(10, text_len // 1000))
 
-            # Use max_chunk_size to prevent memory issues with large texts
-            chunks_df = create_chunks_df(
-                spark, books_df, num_chunks=num_chunks, max_chunk_size=20000
-            )
-            emotion_scores = score_chunks_with_emotions(spark, chunks_df, emotion_df)
-            vad_scores = score_chunks_with_vad(spark, chunks_df, vad_df)
-            chunk_scores = combine_emotion_vad_scores(emotion_scores, vad_scores)
+            # Fixed percentage-based chunking (5% each with default 20)
+            chunks_df = create_chunks_df(spark, books_df, num_chunks=num_chunks)
+            chunk_scores = score_chunks(spark, chunks_df, emotion_df, vad_df)
             trajectory = analyze_trajectory(spark, chunk_scores)
 
             # Compute topics if requested
@@ -230,110 +183,97 @@ def get_input_trajectory(
 
     # Case 2: Book ID input
     elif book_id:
-        # Try to load from main.py output first
-        chunk_scores_path = f"{output_dir}/chunk_scores"
+        # Try to load trajectory from main.py output first (Parquet format)
+        # Note: We always compute chunk_scores on-the-fly for visualization
+        # (chunk_scores are not saved to reduce storage overhead)
         trajectories_path = f"{output_dir}/trajectories"
 
-        chunk_csv_files = glob.glob(f"{chunk_scores_path}/*.csv")
-        traj_csv_files = glob.glob(f"{trajectories_path}/*.csv")
-
-        if (chunk_csv_files or os.path.exists(chunk_scores_path)) and (
-            traj_csv_files or os.path.exists(trajectories_path)
-        ):
+        trajectory_found = False
+        # Try loading trajectory from Parquet
+        if os.path.exists(trajectories_path):
             try:
-                output_chunks = load_chunk_scores_with_types(spark, chunk_scores_path)
-                output_chunks = output_chunks.filter(col("book_id") == book_id)
-
-                output_trajectories = load_trajectories_with_types(
-                    spark, trajectories_path
-                )
+                output_trajectories = spark.read.parquet(trajectories_path)
                 output_trajectories = output_trajectories.filter(
                     col("book_id") == book_id
                 )
 
-                if output_chunks.count() > 0 and output_trajectories.count() > 0:
-                    chunk_scores = output_chunks
+                if output_trajectories.count() > 0:
                     trajectory = output_trajectories
                     book_info = trajectory.select("title", "author").first()
                     title = book_info["title"]
                     author = book_info["author"]
-            except Exception as e:
-                # Fall through to processing from Gutenberg data
-                chunk_scores = None
+                    trajectory_found = True
+            except Exception:
                 trajectory = None
 
-        # Process from Gutenberg data if not in main.py output
-        if chunk_scores is None or trajectory is None:
-            metadata_df = load_metadata(spark, metadata_path)
-            # Trim whitespace and compare as strings to handle any type mismatches
-            metadata_df = metadata_df.filter(
-                (col("Language") == "en")
-                & (trim(col("Etext Number")) == str(book_id).strip())
+        # Always compute chunk_scores for visualization (even if trajectory was found)
+        # This is fast for a single book
+        metadata_df = load_metadata(spark, metadata_path)
+        # Trim whitespace and compare as strings to handle any type mismatches
+        metadata_df = metadata_df.filter(
+            (col("Language") == "en")
+            & (trim(col("Etext Number")) == str(book_id).strip())
+        )
+
+        if metadata_df.count() == 0:
+            # Try without language filter in case language column has issues
+            metadata_df_retry = load_metadata(spark, metadata_path)
+            metadata_df_retry = metadata_df_retry.filter(
+                trim(col("Etext Number")) == str(book_id).strip()
             )
+            if metadata_df_retry.count() == 0:
+                raise ValueError(f"Book {book_id} not found in Gutenberg metadata!")
+            else:
+                metadata_df = metadata_df_retry
 
-            if metadata_df.count() == 0:
-                # Try without language filter in case language column has issues
-                metadata_df_retry = load_metadata(spark, metadata_path)
-                metadata_df_retry = metadata_df_retry.filter(
-                    trim(col("Etext Number")) == str(book_id).strip()
-                )
-                if metadata_df_retry.count() == 0:
-                    raise ValueError(f"Book {book_id} not found in Gutenberg metadata!")
-                else:
-                    metadata_df = metadata_df_retry
+        book_info = metadata_df.select(
+            col("Etext Number").alias("book_id"),
+            col("Title").alias("title"),
+            col("Authors").alias("author"),
+        ).first()
 
-            book_info = metadata_df.select(
-                col("Etext Number").alias("book_id"),
-                col("Title").alias("title"),
-                col("Authors").alias("author"),
-            ).first()
-
+        if not trajectory_found:
             title = book_info["title"]
             author = book_info["author"]
 
-            book_text = read_book_text(book_id, books_dir)
-            if not book_text:
-                raise ValueError(f"Could not read book file for {book_id}!")
+        book_text = read_book_text(book_id, books_dir)
+        if not book_text:
+            raise ValueError(f"Could not read book file for {book_id}!")
 
-            schema = StructType(
-                [
-                    StructField("book_id", StringType(), True),
-                    StructField("title", StringType(), True),
-                    StructField("author", StringType(), True),
-                    StructField("text", StringType(), True),
-                ]
-            )
-            books_df = spark.createDataFrame(
-                [(book_id, title, author, book_text)], schema
-            )
+        schema = StructType(
+            [
+                StructField("book_id", StringType(), True),
+                StructField("title", StringType(), True),
+                StructField("author", StringType(), True),
+                StructField("text", StringType(), True),
+            ]
+        )
+        books_df = spark.createDataFrame([(book_id, title, author, book_text)], schema)
 
-            text_len = len(book_text)
-            # Use percentage-based chunking: default 20 chunks
-            # For very short texts, use fewer chunks
-            num_chunks = 20
-            if text_len < 10000:
-                # For texts < 10k chars, use 10 chunks max
-                num_chunks = max(5, min(10, text_len // 1000))
+        text_len = len(book_text)
+        # Use percentage-based chunking: default 20 chunks
+        # For very short texts, use fewer chunks
+        num_chunks = 20
+        if text_len < 10000:
+            # For texts < 10k chars, use 10 chunks max
+            num_chunks = max(5, min(10, text_len // 1000))
 
-            # Use max_chunk_size to prevent memory issues with large texts
-            chunks_df = create_chunks_df(
-                spark, books_df, num_chunks=num_chunks, max_chunk_size=20000
-            )
-            emotion_scores = score_chunks_with_emotions(spark, chunks_df, emotion_df)
-            vad_scores = score_chunks_with_vad(spark, chunks_df, vad_df)
-            chunk_scores = combine_emotion_vad_scores(emotion_scores, vad_scores)
+        # Fixed percentage-based chunking (5% each with default 20)
+        chunks_df = create_chunks_df(spark, books_df, num_chunks=num_chunks)
+        chunk_scores = score_chunks(spark, chunks_df, emotion_df, vad_df)
+
+        # Only compute trajectory if not already loaded
+        if not trajectory_found:
             trajectory = analyze_trajectory(spark, chunk_scores)
 
-            # Compute topics if requested
-            if compute_topics:
-                feature_df, _ = prepare_topic_features(
-                    spark, chunks_df, vocab_size=5000, min_df=2
-                )
-                lda_model = train_lda(
-                    spark, feature_df, num_topics=num_topics, max_iter=50
-                )
-                chunk_topics = get_chunk_topics(spark, feature_df, lda_model)
-                book_topics = compute_book_topics(spark, chunk_topics)
+        # Compute topics if requested
+        if compute_topics:
+            feature_df, _ = prepare_topic_features(
+                spark, chunks_df, vocab_size=5000, min_df=2
+            )
+            lda_model = train_lda(spark, feature_df, num_topics=num_topics, max_iter=50)
+            chunk_topics = get_chunk_topics(spark, feature_df, lda_model)
+            book_topics = compute_book_topics(spark, chunk_topics)
 
     else:
         raise ValueError("No input specified! Please provide book_id or text_file.")

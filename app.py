@@ -8,15 +8,14 @@ import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, trim
+from pyspark.sql.functions import col
 
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
 from core import (
     create_spark_session,
-    load_trajectories_with_types,
-    load_chunk_scores_with_types,
+    load_trajectories,
     load_metadata,
     get_input_trajectory,
     find_books_by_emotion_preferences,
@@ -304,12 +303,23 @@ def show_book_analysis_and_recommendations():
         # Show how many books are available for comparison
         try:
             spark = st.session_state.spark
-            trajectories = load_trajectories_with_types(spark, trajectories_path)
-            total_books = trajectories.count()
-            st.info(
-                f"📚 **{total_books}** books available in trajectory database for recommendations. "
-                f"(Recommendations will compare against these {total_books} books)"
-            )
+            trajectories = load_trajectories(spark, output_dir)
+            if trajectories is not None:
+                total_books = trajectories.count()
+                has_embeddings = "book_embedding" in trajectories.columns
+                has_topics = "book_topics" in trajectories.columns
+                features_info = []
+                if has_embeddings:
+                    features_info.append("embeddings")
+                if has_topics:
+                    features_info.append("topics")
+                features_str = (
+                    f" (includes {', '.join(features_info)})" if features_info else ""
+                )
+                st.info(
+                    f"📚 **{total_books}** books available in trajectory database for recommendations{features_str}. "
+                    f"(Recommendations will compare against these {total_books} books)"
+                )
         except Exception:
             # If we can't load trajectories, just show basic info
             st.info(
@@ -558,9 +568,10 @@ def show_book_analysis_and_recommendations():
 
                         with st.spinner("Computing recommendations..."):
                             # Load trajectories for comparison
-                            trajectories = load_trajectories_with_types(
-                                spark, trajectories_path
-                            )
+                            trajectories = load_trajectories(spark, output_dir)
+                            if trajectories is None:
+                                st.error("Could not load trajectories")
+                                return
 
                             # Count total books available for comparison
                             total_books_count = trajectories.count()
@@ -703,7 +714,10 @@ def show_explore_books():
     if st.button("Show Top Books", type="primary"):
         with st.spinner("Loading trajectories..."):
             spark = st.session_state.spark
-            trajectories = load_trajectories_with_types(spark, trajectories_path)
+            trajectories = load_trajectories(spark, output_dir)
+            if trajectories is None:
+                st.error("Could not load trajectories")
+                return
 
             emotion_col = f"avg_{emotion_type.lower()}"
             if emotion_col in trajectories.columns:
@@ -750,9 +764,7 @@ def show_explore_books():
 def show_find_books_by_emotions():
     """Show page for finding books by emotion preferences."""
     st.header("Find Books by Emotion Preferences")
-    st.markdown(
-        "Pick a vibe in one click, optionally fine-tune, then get matches."
-    )
+    st.markdown("Pick a vibe in one click, optionally fine-tune, then get matches.")
 
     # Output directory
     output_dir = "output"
@@ -838,6 +850,7 @@ def show_find_books_by_emotions():
         def level_from_value(val, use_high=False):
             candidates = level_map_high if use_high else level_map
             return min(candidates.keys(), key=lambda k: abs(candidates[k] - val))
+
         col1, col2 = st.columns(2)
 
         with col1:
@@ -877,7 +890,9 @@ def show_find_books_by_emotions():
             anticipation_level = st.select_slider(
                 "Anticipation",
                 options=level_opts,
-                value=level_from_value(emotion_preferences["anticipation"], use_high=True),
+                value=level_from_value(
+                    emotion_preferences["anticipation"], use_high=True
+                ),
                 key="pref_anticipation",
             )
             emotion_preferences["anticipation"] = level_map_high[anticipation_level]
@@ -912,7 +927,10 @@ def show_find_books_by_emotions():
     if st.button("Find Matching Books", type="primary"):
         with st.spinner("Finding books that match your preferences..."):
             spark = st.session_state.spark
-            trajectories = load_trajectories_with_types(spark, trajectories_path)
+            trajectories = load_trajectories(spark, output_dir)
+            if trajectories is None:
+                st.error("Could not load trajectories")
+                return
 
             # Find matching books
             matching_books = find_books_by_emotion_preferences(

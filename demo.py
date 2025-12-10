@@ -11,7 +11,6 @@ Workflow:
 import sys
 import os
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col
 import matplotlib.pyplot as plt
 import matplotlib
 
@@ -22,8 +21,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
 from core import (
     create_spark_session,
-    load_trajectories_with_types,
-    load_chunk_scores_with_types,
+    load_trajectories,
     get_input_trajectory,
 )
 from recommender import recommend
@@ -325,12 +323,9 @@ def demo_recommendations(
 
     # Load trajectories from main.py output for comparison (required)
     trajectories_path = f"{output_dir}/trajectories"
-    import glob
 
-    csv_files = glob.glob(f"{trajectories_path}/*.csv")
-
-    if not csv_files and not os.path.exists(trajectories_path):
-        print(f"  ❌ Error: No trajectories found in {trajectories_path}")
+    if not os.path.exists(trajectories_path):
+        print(f"  ❌ Error: No trajectories found in {output_dir}")
         print(
             "  Please run 'python main.py' first to generate trajectories for comparison."
         )
@@ -339,7 +334,24 @@ def demo_recommendations(
 
     try:
         print("  Loading trajectories from main.py output for comparison...")
-        trajectories = load_trajectories_with_types(spark, trajectories_path)
+        trajectories = load_trajectories(spark, output_dir)
+        if trajectories is None:
+            print(f"  ❌ Error: Could not load trajectories from {trajectories_path}")
+            return
+
+        # Log what features are available
+        has_embeddings = "book_embedding" in trajectories.columns
+        has_topics = "book_topics" in trajectories.columns
+        has_emotion_traj = "emotion_trajectory" in trajectories.columns
+        features = []
+        if has_embeddings:
+            features.append("embeddings")
+        if has_topics:
+            features.append("topics")
+        if has_emotion_traj:
+            features.append("emotion trajectories")
+        if features:
+            print(f"  ✓ Loaded trajectories with: {', '.join(features)}")
 
         # Filter to limit if specified
         total_count = trajectories.count()

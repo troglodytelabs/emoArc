@@ -19,17 +19,15 @@ def prepare_topic_features(
 
     Args:
         spark: SparkSession
-        chunks_df: DataFrame with columns: book_id, chunk_index, word
+        chunks_df: DataFrame with columns: book_id, chunk_index, words (array of strings)
         vocab_size: Maximum vocabulary size (default: 5000)
         min_df: Minimum document frequency (default: 2)
 
     Returns:
         Tuple of (feature_df, count_vectorizer_model)
     """
-    # Group words by chunk
-    word_sequences = chunks_df.groupBy("book_id", "chunk_index").agg(
-        collect_list("word").alias("words")
-    )
+    # chunks_df already has words as array
+    word_sequences = chunks_df.select("book_id", "chunk_index", col("words"))
 
     # Convert to term frequency vectors
     count_vectorizer = CountVectorizer(

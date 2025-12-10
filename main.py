@@ -12,11 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
 from lexicon_loader import load_emotion_lexicon, load_vad_lexicon
 from text_preprocessor import load_books, create_chunks_df
-from emotion_scorer import (
-    score_chunks_with_emotions,
-    score_chunks_with_vad,
-    combine_emotion_vad_scores,
-)
+from emotion_scorer import score_chunks
 from trajectory_analyzer import analyze_trajectory
 from word_embeddings import (
     train_word2vec,
@@ -55,10 +51,13 @@ def create_spark_session(app_name: str = "EmoArc", mode: str = "local"):
     # Get memory settings from environment or use adaptive defaults
     if is_local:
         # Local mode: Need explicit memory settings (Spark defaults are too low)
-        driver_memory = os.environ.get("SPARK_DRIVER_MEMORY", "4g")
-        executor_memory = os.environ.get("SPARK_EXECUTOR_MEMORY", "4g")
-        max_result_size = os.environ.get("SPARK_MAX_RESULT_SIZE", "2g")
+        driver_memory = os.environ.get("SPARK_DRIVER_MEMORY", "8g")
+        executor_memory = os.environ.get("SPARK_EXECUTOR_MEMORY", "8g")
+        max_result_size = os.environ.get("SPARK_MAX_RESULT_SIZE", "4g")
         shuffle_partitions = int(os.environ.get("SPARK_SHUFFLE_PARTITIONS", "200"))
+        # Limit parallelism in local mode to prevent OOM when loading large files
+        # Each task can load a multi-MB book file, so fewer parallel tasks = less memory
+        local_parallelism = int(os.environ.get("SPARK_LOCAL_PARALLELISM", "4"))
         # Disable Arrow in local mode to save memory
         arrow_enabled = os.environ.get("SPARK_ARROW_ENABLED", "false").lower() == "true"
     else:
@@ -70,11 +69,16 @@ def create_spark_session(app_name: str = "EmoArc", mode: str = "local"):
         # For clusters, partitions should be based on cluster size (1-2x vCores)
         # Let Spark adaptive execution handle it, or set based on cluster
         shuffle_partitions = int(os.environ.get("SPARK_SHUFFLE_PARTITIONS", "200"))
+        local_parallelism = None  # Not applicable for cluster mode
         # Arrow can be enabled on clusters (better performance, more memory available)
         arrow_enabled = os.environ.get("SPARK_ARROW_ENABLED", "true").lower() == "true"
 
     # Build Spark session
     builder = SparkSession.builder.appName(app_name)
+
+    # In local mode, limit parallelism to prevent OOM when loading large book files
+    if is_local and local_parallelism:
+        builder = builder.master(f"local[{local_parallelism}]")
 
     # Always enable adaptive execution (works in both local and cluster)
     builder = builder.config("spark.sql.adaptive.enabled", "true")
@@ -147,13 +151,7 @@ def main():
         "--num-chunks",
         type=int,
         default=20,
-        help="Target number of chunks per book (percentage-based chunking, default: 20)",
-    )
-    parser.add_argument(
-        "--max-chunk-size",
-        type=int,
-        default=10000,
-        help="Maximum characters per chunk to prevent memory issues (default: 10000)",
+        help="Fixed number of chunks per book (5%% each with default 20)",
     )
     parser.add_argument(
         "--limit",
@@ -226,14 +224,14 @@ def main():
 
     try:
         # Step 1: Load lexicons
-        print("\n[Step 1/8] Loading lexicons...")
+        print("\n[Step 1/6] Loading lexicons...")
         emotion_df = load_emotion_lexicon(spark, args.emotion_lexicon)
         vad_df = load_vad_lexicon(spark, args.vad_lexicon)
         print(f"  ✓ Loaded {emotion_df.count()} emotion word-emotion pairs")
         print(f"  ✓ Loaded {vad_df.count()} VAD terms")
 
         # Step 2: Load books
-        print("\n[Step 2/8] Loading books...")
+        print("\n[Step 2/6] Loading books...")
         books_df = load_books(
             spark,
             args.books_dir,
@@ -243,37 +241,27 @@ def main():
         )
         print(f"  ✓ Loaded {books_df.count()} books")
 
-        # Step 3: Create chunks
-        print("\n[Step 3/8] Creating text chunks...")
+        # Step 3: Create chunks (ONCE, cached for all subsequent operations)
+        print("\n[Step 3/6] Creating text chunks...")
         chunks_df = create_chunks_df(
             spark,
             books_df,
             num_chunks=args.num_chunks,
-            max_chunk_size=args.max_chunk_size,
         )
-        # Cache chunks_df to avoid recomputation during count
+        # chunks_df now has words as array (NOT exploded) - much more memory efficient
+        # ~2000 rows for 100 books instead of ~10 million rows
         chunks_df.cache()
         chunk_count = chunks_df.count()
-        print(f"  ✓ Created chunks (total rows: {chunk_count})")
+        print(f"  ✓ Created {chunk_count} chunks")
 
-        # Step 4: Score chunks with emotions
-        print("\n[Step 4/8] Scoring chunks with emotions...")
-        emotion_scores = score_chunks_with_emotions(spark, chunks_df, emotion_df)
-        print(f"  ✓ Scored {emotion_scores.count()} chunks with emotions")
+        # Step 4: Score chunks with emotions AND VAD in one pass
+        print("\n[Step 4/6] Scoring chunks with emotions and VAD...")
+        chunk_scores = score_chunks(spark, chunks_df, emotion_df, vad_df)
+        chunk_scores.cache()
+        print(f"  ✓ Scored {chunk_scores.count()} chunks with emotions and VAD")
 
-        # Step 5: Score chunks with VAD
-        print("\n[Step 5/8] Scoring chunks with VAD...")
-        vad_scores = score_chunks_with_vad(spark, chunks_df, vad_df)
-        print(f"  ✓ Scored {vad_scores.count()} chunks with VAD")
-
-        # Unpersist chunks_df now that we have scores (saves memory)
-        chunks_df.unpersist()
-
-        # Combine scores
-        chunk_scores = combine_emotion_vad_scores(emotion_scores, vad_scores)
-
-        # Step 6: Analyze trajectories
-        print("\n[Step 6/8] Analyzing emotion trajectories...")
+        # Step 5: Analyze trajectories
+        print("\n[Step 5/6] Analyzing emotion trajectories...")
         trajectories = analyze_trajectory(spark, chunk_scores)
 
         # Filter out books with no chunks (shouldn't happen, but safety check)
@@ -281,62 +269,45 @@ def main():
         trajectory_count = trajectories.count()
         print(f"  ✓ Analyzed {trajectory_count} book trajectories")
 
-        # Step 7: Compute word embeddings
+        # Step 6: Compute word embeddings and topic distributions
+        # Note: Embeddings and topics are computed at BOOK level for recommendations
+        # (chunk-level is aggregated to book-level)
         book_embeddings = None
+        book_topics = None
+
         if not args.skip_embeddings:
-            print("\n[Step 7/8] Computing word embeddings...")
-            # Reload chunks_df for embeddings (we unpersisted it earlier)
-            print("  Recreating chunks for embeddings...")
-            chunks_df_emb = create_chunks_df(
-                spark,
-                books_df,
-                num_chunks=args.num_chunks,
-                max_chunk_size=args.max_chunk_size,
-            )
+            print("\n[Step 6a/6] Computing word embeddings...")
+            # Reuse cached chunks_df
             print("  Training Word2Vec model...")
             word2vec_model = train_word2vec(
-                spark, chunks_df_emb, vector_size=args.vector_size, min_count=5
+                spark, chunks_df, vector_size=args.vector_size, min_count=5
             )
             print("  ✓ Word2Vec model trained")
 
             print("  Computing chunk embeddings...")
             chunk_embeddings = compute_chunk_embeddings(
-                spark, chunks_df_emb, word2vec_model
+                spark, chunks_df, word2vec_model
             )
-            # Cache to avoid recomputation
             chunk_embeddings.cache()
-            chunk_count = chunk_embeddings.count()
-            print(f"  ✓ Computed embeddings for {chunk_count} chunks")
+            emb_count = chunk_embeddings.count()
+            print(f"  ✓ Computed embeddings for {emb_count} chunks")
 
-            print("  Computing book-level embeddings...")
+            print("  Aggregating to book-level embeddings...")
             book_embeddings = compute_book_embedding(spark, chunk_embeddings)
             book_count = book_embeddings.count()
             print(f"  ✓ Computed embeddings for {book_count} books")
 
-            # Unpersist cached data
             chunk_embeddings.unpersist()
-            # Unpersist chunks_df_emb
-            chunks_df_emb.unpersist()
         else:
-            print("\n[Step 7/8] Skipping word embeddings (--skip-embeddings)")
+            print("\n[Step 6a/6] Skipping word embeddings (--skip-embeddings)")
 
-        # Step 8: Compute topic distributions
-        book_topics = None
         if not args.skip_topics:
-            print("\n[Step 8/8] Computing topic distributions...")
-            # Reload chunks_df for topic modeling
-            print("  Recreating chunks for topic modeling...")
-            chunks_df_topics = create_chunks_df(
-                spark,
-                books_df,
-                num_chunks=args.num_chunks,
-                max_chunk_size=args.max_chunk_size,
-            )
+            print("\n[Step 6b/6] Computing topic distributions...")
+            # Reuse cached chunks_df
             print("  Preparing topic features...")
             feature_df, cv_model = prepare_topic_features(
-                spark, chunks_df_topics, vocab_size=5000, min_df=2
+                spark, chunks_df, vocab_size=5000, min_df=2
             )
-            # Cache feature_df to avoid recomputation
             feature_df.cache()
             print("  ✓ Features prepared")
 
@@ -352,17 +323,19 @@ def main():
             chunk_topic_count = chunk_topics.count()
             print(f"  ✓ Computed topics for {chunk_topic_count} chunks")
 
-            print("  Computing book-level topics...")
+            print("  Aggregating to book-level topics...")
             book_topics = compute_book_topics(spark, chunk_topics)
             topic_count = book_topics.count()
             print(f"  ✓ Computed topics for {topic_count} books")
 
-            # Unpersist cached data
             feature_df.unpersist()
             chunk_topics.unpersist()
-            chunks_df_topics.unpersist()
         else:
-            print("\n[Step 8/8] Skipping topic modeling (--skip-topics)")
+            print("\n[Step 6b/6] Skipping topic modeling (--skip-topics)")
+
+        # Now unpersist chunks_df as all processing is complete
+        chunks_df.unpersist()
+        chunk_scores.unpersist()
 
         # Join embeddings and topics with trajectories
         if book_embeddings is not None:
@@ -379,26 +352,14 @@ def main():
             )
             print("  Some books may have had no chunks or processing errors.")
 
-        # Save results
+        # Save results as Parquet (efficient columnar format with full type support)
+        # Only save trajectories - chunk_scores are intermediate and not needed for recommendations
         print(f"\n[Saving] Writing results to {args.output}/...")
-        os.makedirs(args.output, exist_ok=True)
 
-        chunk_scores.coalesce(1).write.mode("overwrite").option("header", "true").csv(
-            f"{args.output}/chunk_scores"
-        )
-
-        # Remove array columns (not supported by CSV)
-        # These can be recomputed if needed
-        columns_to_drop = ["emotion_trajectory"]
-        if "book_embedding" in trajectories.columns:
-            columns_to_drop.append("book_embedding")
-        if "book_topics" in trajectories.columns:
-            columns_to_drop.append("book_topics")
-
-        trajectories_for_csv = trajectories.drop(*columns_to_drop)
-        trajectories_for_csv.coalesce(1).write.mode("overwrite").option(
-            "header", "true"
-        ).csv(f"{args.output}/trajectories")
+        # Save trajectories (includes embeddings, topics, emotion trajectories)
+        # This is the only file needed for recommendations
+        trajectories.write.mode("overwrite").parquet(f"{args.output}/trajectories")
+        print(f"  ✓ Trajectories saved to {args.output}/trajectories")
 
         print("  ✓ Results saved successfully!")
 

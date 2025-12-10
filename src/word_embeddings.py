@@ -18,17 +18,15 @@ def train_word2vec(
 
     Args:
         spark: SparkSession
-        chunks_df: DataFrame with columns: book_id, chunk_index, word
+        chunks_df: DataFrame with columns: book_id, chunk_index, words (array of strings)
         vector_size: Dimension of word vectors (default: 100)
         min_count: Minimum word count to be included (default: 5)
 
     Returns:
         Trained Word2VecModel
     """
-    # Group words by chunk to create sequences
-    word_sequences = chunks_df.groupBy("book_id", "chunk_index").agg(
-        collect_list("word").alias("words")
-    )
+    # chunks_df already has words as array, just rename for Word2Vec
+    word_sequences = chunks_df.select("book_id", "chunk_index", col("words"))
 
     # Train Word2Vec model
     word2vec = Word2Vec(
@@ -51,16 +49,14 @@ def compute_chunk_embeddings(
 
     Args:
         spark: SparkSession
-        chunks_df: DataFrame with columns: book_id, chunk_index, word
+        chunks_df: DataFrame with columns: book_id, chunk_index, words (array of strings)
         word2vec_model: Trained Word2VecModel
 
     Returns:
         DataFrame with chunk embeddings (average of word vectors)
     """
-    # Group words by chunk
-    word_sequences = chunks_df.groupBy("book_id", "chunk_index").agg(
-        collect_list("word").alias("words")
-    )
+    # chunks_df already has words as array
+    word_sequences = chunks_df.select("book_id", "chunk_index", col("words"))
 
     # Transform to get word vectors
     chunk_vectors = word2vec_model.transform(word_sequences)

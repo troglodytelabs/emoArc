@@ -3,7 +3,7 @@ Text preprocessing: chunking, stopwords removal, tokenization.
 """
 
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, udf, explode
+from pyspark.sql.functions import col, udf, explode, regexp_extract
 from pyspark.sql.types import (
     ArrayType,
     StringType,
@@ -62,40 +62,54 @@ def load_books(
         col("Authors").alias("author"),
     )
 
+    # Filter out null/empty book_ids from metadata
+    metadata_df = metadata_df.filter(
+        col("book_id").isNotNull() & (col("book_id") != "")
+    )
+
     if limit:
         metadata_df = metadata_df.limit(limit)
 
-    # Load book texts
-    def read_book_text(book_id: str) -> str:
-        """Read book text from file."""
-        try:
-            book_path = f"{books_dir}/{book_id}"
-            with open(book_path, "r", encoding="utf-8", errors="ignore") as f:
-                text = f.read()
-                # Remove Project Gutenberg headers/footers
-                # Remove content between *** START and *** END markers
-                text = re.sub(r"\*\*\* START.*?\*\*\*", "", text, flags=re.DOTALL)
-                text = re.sub(r"\*\*\* END.*?\*\*\*", "", text, flags=re.DOTALL)
-                return text
-        except Exception:
-            return ""
-
-    # Create RDD of (book_id, text) pairs
-    book_ids = [row["book_id"] for row in metadata_df.select("book_id").collect()]
-    book_texts = spark.sparkContext.parallelize(book_ids).map(
-        lambda bid: (bid, read_book_text(bid))
-    )
-
-    # Convert to DataFrame
-    from pyspark.sql.types import StructType, StructField, StringType
-
-    schema = StructType(
-        [
-            StructField("book_id", StringType(), True),
-            StructField("text", StringType(), True),
+    # Collect target book IDs for filtering
+    # This is efficient for small limits
+    target_book_ids = None
+    if limit:
+        target_book_ids = [
+            row.book_id for row in metadata_df.select("book_id").collect()
         ]
+
+    # Use binaryFile format to read files lazily
+    # This allows us to filter by path BEFORE reading the content
+    # path, modificationTime, length, content
+    books_df = spark.read.format("binaryFile").load(books_dir)
+
+    # Extract book_id from path
+    # We use the 'path' column provided by binaryFile source
+    books_df = books_df.withColumn(
+        "book_id_extracted", regexp_extract(col("path"), r"/([^/]+)$", 1)
     )
-    books_df = spark.createDataFrame(book_texts, schema)
+
+    # Filter books if we have a limit
+    if target_book_ids:
+        books_df = books_df.filter(col("book_id_extracted").isin(target_book_ids))
+
+    # Convert binary content to string
+    books_df = books_df.withColumn("text", col("content").cast("string"))
+
+    # Clean text UDF
+    def clean_text(text):
+        if text is None:
+            return ""
+        # Remove Project Gutenberg headers/footers
+        text = re.sub(r"\*\*\* START.*?\*\*\*", "", text, flags=re.DOTALL)
+        text = re.sub(r"\*\*\* END.*?\*\*\*", "", text, flags=re.DOTALL)
+        return text
+
+    clean_text_udf = udf(clean_text, StringType())
+    books_df = books_df.withColumn("text", clean_text_udf(col("text")))
+
+    # Select only needed columns and alias book_id
+    books_df = books_df.select(col("book_id_extracted").alias("book_id"), col("text"))
 
     # Join with metadata
     result_df = metadata_df.join(books_df, on="book_id", how="inner")
@@ -103,32 +117,29 @@ def load_books(
     return result_df
 
 
-# UDFs are now defined inside create_chunks_df to avoid module serialization issues
-
-
-def create_chunks_df(
-    spark: SparkSession, books_df, num_chunks: int = 20, max_chunk_size: int = 20000
-):
+def create_chunks_df(spark: SparkSession, books_df, num_chunks: int = 20):
     """
-    Create chunks from books DataFrame using percentage-based chunking with max size limit.
+    Create chunks from books DataFrame using fixed percentage-based chunking.
+
+    Each book is divided into exactly num_chunks chunks (default 20 = 5% each).
+    Returns chunks with preprocessed words as arrays (NOT exploded), which is much more
+    memory efficient than the exploded form.
 
     Args:
         spark: SparkSession
         books_df: DataFrame with columns: book_id, title, author, text
-        num_chunks: Target number of chunks to create (may be adjusted based on max_chunk_size)
-        max_chunk_size: Maximum characters per chunk to prevent memory issues (default: 20000)
+        num_chunks: Fixed number of chunks per book (default: 20 = 5% each)
 
     Returns:
-        DataFrame with columns: book_id, title, author, chunk_index, chunk_text, word
+        DataFrame with columns: book_id, title, author, chunk_index, words (array of strings)
     """
 
-    # Define chunk creation function with num_chunks and max_chunk_size captured in closure
-    # This must be self-contained for Spark serialization
-    def make_chunk_udf(n_chunks, max_size):
+    # Define chunk creation function with num_chunks captured in closure
+    def make_chunk_udf(n_chunks):
         """Factory function to create chunk UDF with captured parameters."""
 
         def _create_chunks_wrapper(text):
-            """Wrapper function for UDF that creates percentage-based chunks with size limits."""
+            """Create exactly n_chunks percentage-based chunks from text."""
             try:
                 if not text:
                     return []
@@ -137,55 +148,21 @@ def create_chunks_df(
                 if text_len == 0:
                     return []
 
-                # Calculate ideal chunk size based on percentage
-                ideal_chunk_size = (
-                    max(1, text_len // n_chunks) if n_chunks > 0 else text_len
-                )
-
-                # For very short texts, ensure minimum chunk size to avoid too many tiny chunks
-                min_chunk_size = 100
-                if text_len < min_chunk_size * n_chunks:
-                    # Adjust num_chunks for very short texts
-                    actual_num_chunks = (
-                        max(1, text_len // min_chunk_size) if min_chunk_size > 0 else 1
-                    )
-                    chunk_size = (
-                        max(1, text_len // actual_num_chunks)
-                        if actual_num_chunks > 0
-                        else text_len
-                    )
-                else:
-                    # For large texts, limit chunk size to prevent memory issues
-                    if ideal_chunk_size > max_size:
-                        # Recalculate actual number of chunks based on max_chunk_size
-                        actual_num_chunks = (
-                            max(n_chunks, (text_len + max_size - 1) // max_size)
-                            if max_size > 0
-                            else n_chunks
-                        )
-                        chunk_size = max_size
-                    else:
-                        actual_num_chunks = n_chunks
-                        chunk_size = ideal_chunk_size
-
-                # Ensure we have at least 1 chunk
-                actual_num_chunks = max(1, actual_num_chunks)
-                chunk_size = max(1, chunk_size)
+                # Always create exactly n_chunks (5% each by default)
+                chunk_size = max(1, text_len // n_chunks)
 
                 chunks = []
-                for i in range(actual_num_chunks):
+                for i in range(n_chunks):
                     start_idx = i * chunk_size
                     # Last chunk gets all remaining text
-                    if i == actual_num_chunks - 1:
+                    if i == n_chunks - 1:
                         end_idx = text_len
                     else:
-                        end_idx = min(start_idx + chunk_size, text_len)
+                        end_idx = start_idx + chunk_size
 
-                    # Ensure we don't go out of bounds
-                    if start_idx < text_len:
-                        chunks.append(
-                            {"chunk_index": i, "chunk_text": text[start_idx:end_idx]}
-                        )
+                    chunk_text = text[start_idx:end_idx]
+                    if chunk_text:  # Only add non-empty chunks
+                        chunks.append({"chunk_index": i, "chunk_text": chunk_text})
 
                 return chunks if chunks else [{"chunk_index": 0, "chunk_text": text}]
             except Exception:
@@ -204,14 +181,12 @@ def create_chunks_df(
             ),
         )
 
-    # Create UDF with num_chunks and max_chunk_size
-    chunk_udf = make_chunk_udf(num_chunks, max_chunk_size)
+    # Create UDF with num_chunks
+    chunk_udf = make_chunk_udf(num_chunks)
 
     # Define preprocessing function - completely self-contained, defined inside this function
     def _preprocess_wrapper(text):
-        """Wrapper function for UDF that handles preprocessing.
-        All imports are inside to ensure they're available on worker nodes.
-        """
+        """Wrapper function for UDF that handles preprocessing."""
         if not text:
             return []
 
@@ -266,26 +241,16 @@ def create_chunks_df(
         explode(chunk_udf(col("text"))).alias("chunk"),
     )
 
-    # Extract chunk_index and chunk_text
+    # Extract chunk_index and preprocess text to words in one step
+    # We skip chunk_text since it's not used anywhere downstream
     chunks_df = chunks_df.select(
         col("book_id"),
         col("title"),
         col("author"),
         col("chunk.chunk_index").alias("chunk_index"),
-        col("chunk.chunk_text").alias("chunk_text"),
+        preprocess_udf(col("chunk.chunk_text")).alias("words"),
     )
 
-    # Preprocess chunks to get words
-    chunks_df = chunks_df.withColumn("words", preprocess_udf(col("chunk_text")))
-
-    # Explode words - one row per word
-    chunks_df = chunks_df.select(
-        col("book_id"),
-        col("title"),
-        col("author"),
-        col("chunk_index"),
-        col("chunk_text"),
-        explode(col("words")).alias("word"),
-    )
-
+    # Return with words as array - NOT exploded
+    # This is much more memory efficient: ~2000 rows vs ~10 million rows
     return chunks_df

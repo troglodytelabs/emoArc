@@ -18,45 +18,6 @@ from pyspark.sql.functions import (
     coalesce,
 )
 from pyspark.sql.types import DoubleType
-import math
-
-
-def compute_trajectory_similarity(traj1, traj2):
-    """
-    Compute similarity between two emotion trajectories.
-    Uses cosine similarity.
-
-    Args:
-        traj1: First trajectory (array of emotion scores)
-        traj2: Second trajectory (array of emotion scores)
-
-    Returns:
-        Similarity score (higher = more similar)
-    """
-    if not traj1 or not traj2:
-        return 0.0
-
-    # Flatten trajectories if needed
-    if isinstance(traj1[0], list):
-        traj1 = [item for sublist in traj1 for item in sublist]
-    if isinstance(traj2[0], list):
-        traj2 = [item for sublist in traj2 for item in sublist]
-
-    # Pad to same length
-    max_len = max(len(traj1), len(traj2))
-    traj1 = traj1 + [0.0] * (max_len - len(traj1))
-    traj2 = traj2 + [0.0] * (max_len - len(traj2))
-
-    # Compute cosine similarity
-    dot_product = sum(a * b for a, b in zip(traj1, traj2))
-    norm1 = math.sqrt(sum(a * a for a in traj1))
-    norm2 = math.sqrt(sum(b * b for b in traj2))
-
-    if norm1 == 0 or norm2 == 0:
-        return 0.0
-
-    similarity = dot_product / (norm1 * norm2)
-    return float(similarity)
 
 
 def compute_feature_similarity(
@@ -604,14 +565,44 @@ def recommend(
         )
 
         if other_books_with_traj.count() > 0:
-            similarity_udf = udf(
-                lambda traj: compute_trajectory_similarity(
-                    liked_row["emotion_trajectory"], traj
-                )
-                if traj is not None
-                else 0.0,
-                DoubleType(),
-            )
+            # Capture the liked trajectory as a local variable for the closure
+            liked_trajectory = liked_row["emotion_trajectory"]
+
+            def trajectory_sim_func(traj):
+                """Inline similarity function to avoid module import issues in PySpark workers."""
+                import math  # Import inside for PySpark worker serialization
+
+                if traj is None or liked_trajectory is None:
+                    return 0.0
+
+                traj1 = list(liked_trajectory)
+                traj2 = list(traj)
+
+                if not traj1 or not traj2:
+                    return 0.0
+
+                # Flatten trajectories if needed
+                if isinstance(traj1[0], list):
+                    traj1 = [item for sublist in traj1 for item in sublist]
+                if isinstance(traj2[0], list):
+                    traj2 = [item for sublist in traj2 for item in sublist]
+
+                # Pad to same length
+                max_len = max(len(traj1), len(traj2))
+                traj1 = traj1 + [0.0] * (max_len - len(traj1))
+                traj2 = traj2 + [0.0] * (max_len - len(traj2))
+
+                # Compute cosine similarity
+                dot_product = sum(a * b for a, b in zip(traj1, traj2))
+                norm1 = math.sqrt(sum(a * a for a in traj1))
+                norm2 = math.sqrt(sum(b * b for b in traj2))
+
+                if norm1 == 0 or norm2 == 0:
+                    return 0.0
+
+                return float(dot_product / (norm1 * norm2))
+
+            similarity_udf = udf(trajectory_sim_func, DoubleType())
 
             trajectory_sim_df = (
                 trajectory_df.filter(col("book_id") != liked_book_id)
