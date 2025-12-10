@@ -261,6 +261,7 @@ def create_chunks_df(spark: SparkSession, books_df, chunk_size: int = 10000, num
         col("book_id"),
         col("title"),
         col("author"),
+        col("bookshelves"),
         explode(chunk_udf(col("text"))).alias("chunk"),
     )
 
@@ -269,6 +270,7 @@ def create_chunks_df(spark: SparkSession, books_df, chunk_size: int = 10000, num
         col("book_id"),
         col("title"),
         col("author"),
+        col("bookshelves"),
         col("chunk.chunk_index").alias("chunk_index"),
         col("chunk.chunk_text").alias("chunk_text"),
     )
@@ -285,6 +287,7 @@ def create_chunks_df(spark: SparkSession, books_df, chunk_size: int = 10000, num
         col("book_id"),
         col("title"),
         col("author"),
+        col("bookshelves"),
         col("chunk_index"),
         col("chunk_word_count"),  # Preserve word count for normalization
         explode(col("words")).alias("word"),

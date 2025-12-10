@@ -28,7 +28,7 @@ def score_chunks_with_emotions(spark: SparkSession, chunks_df, emotion_df):
     # Group by book_id, chunk_index and emotion, count occurrences
     # Also preserve chunk_word_count using first() aggregation
     chunk_emotions = emotion_scores.groupBy(
-        "book_id", "title", "author", "chunk_index", "emotion"
+        "book_id", "title", "author", "bookshelves", "chunk_index", "emotion"
     ).agg(
         count("emotion").alias("emotion_count"),
         first("chunk_word_count").alias("chunk_word_count")
@@ -37,7 +37,7 @@ def score_chunks_with_emotions(spark: SparkSession, chunks_df, emotion_df):
     # Pivot to get one row per chunk with all emotions
     # Use only Plutchik's 8 basic emotions (exclude "negative" and "positive" which are sentiment labels)
     chunk_emotions_pivot = (
-        chunk_emotions.groupBy("book_id", "title", "author", "chunk_index")
+        chunk_emotions.groupBy("book_id", "title", "author", "bookshelves", "chunk_index")
         .pivot(
             "emotion",
             values=[
@@ -57,11 +57,11 @@ def score_chunks_with_emotions(spark: SparkSession, chunks_df, emotion_df):
 
     # Get chunk_word_count back (it's lost in pivot)
     word_counts = chunk_emotions.select(
-        "book_id", "chunk_index", "chunk_word_count"
+        "book_id", "bookshelves", "chunk_index", "chunk_word_count"
     ).distinct()
 
     chunk_emotions_pivot = chunk_emotions_pivot.join(
-        word_counts, on=["book_id", "chunk_index"], how="left"
+        word_counts, on=["book_id", "bookshelves", "chunk_index"], how="left"
     )
 
     # NORMALIZE: Convert raw counts to density (per 1000 words)
@@ -96,7 +96,7 @@ def score_chunks_with_vad(spark: SparkSession, chunks_df, vad_df):
     vad_scores = chunks_df.join(vad_df, chunks_df.word == vad_df.term, "left")
 
     # Group by book_id, chunk_index and compute averages
-    chunk_vad = vad_scores.groupBy("book_id", "title", "author", "chunk_index").agg(
+    chunk_vad = vad_scores.groupBy("book_id", "title", "author", "bookshelves", "chunk_index").agg(
         avg("valence").alias("avg_valence"),
         avg("arousal").alias("avg_arousal"),
         avg("dominance").alias("avg_dominance"),
@@ -123,7 +123,7 @@ def combine_emotion_vad_scores(emotion_scores_df, vad_scores_df):
         Combined DataFrame with all scores
     """
     combined = emotion_scores_df.join(
-        vad_scores_df, on=["book_id", "title", "author", "chunk_index"], how="outer"
+        vad_scores_df, on=["book_id", "title", "author", "bookshelves", "chunk_index"], how="outer"
     )
 
     # Fill missing values with 0 (only Plutchik's 8 basic emotions)
