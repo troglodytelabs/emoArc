@@ -513,7 +513,7 @@ def create_enhanced_radar_chart(book, percentiles):
 
 
 def create_narrative_arc_chart(book, narrative_analysis):
-    """Create comprehensive narrative arc visualization."""
+    """Create clean, focused narrative arc visualization."""
     if not book.emotion_trajectory or not narrative_analysis:
         return None
 
@@ -521,70 +521,97 @@ def create_narrative_arc_chart(book, narrative_analysis):
     intensities = narrative_analysis['intensities']
     climax_idx = int((narrative_analysis['climax_position'] / 100) * len(chunk_indices))
 
-    # Create subplots
-    fig = make_subplots(
-        rows=2, cols=1,
-        row_heights=[0.6, 0.4],
-        subplot_titles=('Emotional Intensity Throughout Narrative', 'Individual Emotions'),
-        vertical_spacing=0.12
-    )
+    # Create single clean chart with total intensity
+    fig = go.Figure()
 
-    # Top plot: Overall intensity with climax marker
+    # Main intensity line with area fill
     fig.add_trace(
         go.Scatter(
             x=chunk_indices,
             y=intensities,
-            mode='lines+markers',
-            name='Total Intensity',
+            mode='lines',
+            name='Total Emotional Intensity',
             line=dict(color='rgb(99, 110, 250)', width=3),
             fill='tozeroy',
-            fillcolor='rgba(99, 110, 250, 0.2)',
-        ),
-        row=1, col=1
+            fillcolor='rgba(99, 110, 250, 0.3)',
+            hovertemplate='<b>Chunk %{x}</b><br>Intensity: %{y:.1f}<extra></extra>',
+        )
     )
 
-    # Mark climax
-    fig.add_trace(
-        go.Scatter(
-            x=[climax_idx],
-            y=[intensities[climax_idx]],
-            mode='markers+text',
-            name='Climax',
-            marker=dict(color='red', size=15, symbol='star'),
-            text=['CLIMAX'],
-            textposition='top center',
-            textfont=dict(size=12, color='red'),
-        ),
-        row=1, col=1
-    )
+    # Mark climax with prominent star
+    if 0 <= climax_idx < len(intensities):
+        fig.add_trace(
+            go.Scatter(
+                x=[climax_idx],
+                y=[intensities[climax_idx]],
+                mode='markers+text',
+                name='Climax',
+                marker=dict(color='#ef4444', size=20, symbol='star', line=dict(color='white', width=2)),
+                text=['CLIMAX'],
+                textposition='top center',
+                textfont=dict(size=14, color='#ef4444', family='Arial Black'),
+                hovertemplate='<b>CLIMAX</b><br>Position: %{x}<br>Intensity: %{y:.1f}<extra></extra>',
+            )
+        )
 
-    # Bottom plot: Individual emotions
-    emotions_to_plot = ['joy', 'sadness', 'fear', 'anger']
-    colors = ['#10b981', '#3b82f6', '#ef4444', '#f59e0b']
+    # Add subtle individual emotion traces (optional - can be toggled)
+    emotions_data = {
+        'joy': ('#10b981', [chunk.get('joy', 0) for chunk in book.emotion_trajectory]),
+        'sadness': ('#3b82f6', [chunk.get('sadness', 0) for chunk in book.emotion_trajectory]),
+        'fear': ('#ef4444', [chunk.get('fear', 0) for chunk in book.emotion_trajectory]),
+        'anger': ('#f59e0b', [chunk.get('anger', 0) for chunk in book.emotion_trajectory]),
+    }
 
-    for emotion, color in zip(emotions_to_plot, colors):
-        values = [chunk.get(emotion, 0) for chunk in book.emotion_trajectory]
+    for emotion, (color, values) in emotions_data.items():
         fig.add_trace(
             go.Scatter(
                 x=chunk_indices,
                 y=values,
                 mode='lines',
                 name=emotion.capitalize(),
-                line=dict(color=color, width=2),
-            ),
-            row=2, col=1
+                line=dict(color=color, width=1.5, dash='dot'),
+                opacity=0.6,
+                visible='legendonly',  # Hidden by default, can be toggled
+                hovertemplate=f'<b>{emotion.capitalize()}</b><br>Chunk %{{x}}<br>Score: %{{y:.1f}}<extra></extra>',
+            )
         )
 
-    fig.update_xaxes(title_text="Narrative Progress (%)", row=2, col=1)
-    fig.update_yaxes(title_text="Intensity", row=1, col=1)
-    fig.update_yaxes(title_text="Score", row=2, col=1)
-
+    # Clean, modern layout
     fig.update_layout(
-        height=600,
+        title=dict(
+            text='Emotional Intensity Throughout Narrative',
+            x=0.5,
+            xanchor='center',
+            font=dict(size=18, color='#1f2937')
+        ),
+        xaxis=dict(
+            title='Narrative Progress (Chunk Number)',
+            showgrid=True,
+            gridcolor='rgba(0,0,0,0.05)',
+            zeroline=False,
+        ),
+        yaxis=dict(
+            title='Emotional Intensity',
+            showgrid=True,
+            gridcolor='rgba(0,0,0,0.05)',
+            zeroline=False,
+        ),
+        height=450,
         showlegend=True,
+        legend=dict(
+            orientation='h',
+            yanchor='bottom',
+            y=1.02,
+            xanchor='right',
+            x=1,
+            bgcolor='rgba(255,255,255,0.8)',
+            bordercolor='rgba(0,0,0,0.1)',
+            borderwidth=1,
+        ),
         hovermode='x unified',
         paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='white',
+        margin=dict(l=60, r=40, t=80, b=60),
     )
 
     return json.dumps(fig, cls=plotly.utils.PlotlyJSONEncoder)
