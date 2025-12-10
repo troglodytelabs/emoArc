@@ -554,12 +554,16 @@ def create_narrative_arc_chart(book, narrative_analysis):
             )
         )
 
-    # Add subtle individual emotion traces (optional - can be toggled)
+    # All 8 Plutchik emotions - visible by default
     emotions_data = {
         'joy': ('#10b981', [chunk.get('joy', 0) for chunk in book.emotion_trajectory]),
-        'sadness': ('#3b82f6', [chunk.get('sadness', 0) for chunk in book.emotion_trajectory]),
+        'trust': ('#3b82f6', [chunk.get('trust', 0) for chunk in book.emotion_trajectory]),
         'fear': ('#ef4444', [chunk.get('fear', 0) for chunk in book.emotion_trajectory]),
-        'anger': ('#f59e0b', [chunk.get('anger', 0) for chunk in book.emotion_trajectory]),
+        'surprise': ('#f59e0b', [chunk.get('surprise', 0) for chunk in book.emotion_trajectory]),
+        'sadness': ('#6366f1', [chunk.get('sadness', 0) for chunk in book.emotion_trajectory]),
+        'disgust': ('#a855f7', [chunk.get('disgust', 0) for chunk in book.emotion_trajectory]),
+        'anger': ('#ec4899', [chunk.get('anger', 0) for chunk in book.emotion_trajectory]),
+        'anticipation': ('#14b8a6', [chunk.get('anticipation', 0) for chunk in book.emotion_trajectory]),
     }
 
     for emotion, (color, values) in emotions_data.items():
@@ -569,9 +573,9 @@ def create_narrative_arc_chart(book, narrative_analysis):
                 y=values,
                 mode='lines',
                 name=emotion.capitalize(),
-                line=dict(color=color, width=1.5, dash='dot'),
-                opacity=0.6,
-                visible='legendonly',  # Hidden by default, can be toggled
+                line=dict(color=color, width=2),
+                opacity=0.7,
+                visible=True,  # All emotions visible by default
                 hovertemplate=f'<b>{emotion.capitalize()}</b><br>Chunk %{{x}}<br>Score: %{{y:.1f}}<extra></extra>',
             )
         )
