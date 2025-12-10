@@ -19,12 +19,17 @@
                 <h1 class="text-4xl font-bold text-gray-900 mb-2">{{ book.title }}</h1>
                 <p class="text-xl text-gray-600 mb-4">by {{ book.author }}</p>
 
-                <div class="flex items-center gap-3">
+                <div class="flex flex-wrap items-center gap-2 mt-2">
                     {% if book.primary_genre %}
                     <span class="px-4 py-2 bg-purple-100 text-purple-800 rounded-full text-sm font-medium">
                         {{ book.primary_genre }}
                     </span>
                     {% endif %}
+                    {% for shelf in book.bookshelves %}
+                    <span class="px-3 py-1 bg-indigo-100 text-indigo-800 rounded text-xs">
+                        {{ shelf }}
+                    </span>
+                    {% endfor %}
                     <span class="text-sm text-gray-500">ID: {{ book.book_id }}</span>
                 </div>
             </div>

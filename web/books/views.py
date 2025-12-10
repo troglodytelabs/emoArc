@@ -175,6 +175,7 @@ def home(request):
     """Home page with book search and filtering."""
     search_query = request.GET.get('q', '')
     genre_filter = request.GET.get('genre', '')
+    bookshelf_filter = request.GET.get('bookshelf', '')  # NEW: Bookshelf filter
     sort_by = request.GET.get('sort', 'book_id')  # Default: book_id
 
     books = Book.objects.all()
@@ -189,6 +190,10 @@ def home(request):
     if genre_filter:
         books = books.filter(primary_genre__icontains=genre_filter)
 
+    if bookshelf_filter:
+        # Filter books that have this bookshelf in their bookshelves JSON array
+        books = books.filter(bookshelves__contains=[bookshelf_filter])
+
     # Validate sort parameter (only allow book_id, author, title)
     valid_sorts = ['book_id', 'author', 'title']
     if sort_by not in valid_sorts:
@@ -199,6 +204,13 @@ def home(request):
     page_obj = paginator.get_page(request.GET.get('page'))
 
     unique_genres = Book.objects.exclude(primary_genre='').values_list('primary_genre', flat=True).distinct()
+
+    # Extract unique bookshelves from all books (flatten JSON arrays)
+    all_bookshelves = set()
+    for book in Book.objects.exclude(bookshelves=[]).values_list('bookshelves', flat=True):
+        if book:
+            all_bookshelves.update(book)
+    unique_bookshelves = sorted(all_bookshelves)
 
     # Enhanced statistics
     total_books = Book.objects.count()
@@ -218,8 +230,10 @@ def home(request):
         'page_obj': page_obj,
         'search_query': search_query,
         'genre_filter': genre_filter,
+        'bookshelf_filter': bookshelf_filter,  # NEW
         'sort_by': sort_by,
         'unique_genres': unique_genres,
+        'unique_bookshelves': unique_bookshelves,  # NEW
         'stats': stats,
     }
 
@@ -361,35 +375,48 @@ def genre_explorer(request):
 
 
 def recommendations(request, book_id):
-    """get book recommendations based on emotional similarity using euclidean distance."""
+    """Get book recommendations based on emotional + bookshelf similarity."""
     book = get_object_or_404(Book, book_id=book_id)
     all_books = Book.objects.exclude(id=book.id)
     recommendations = []
 
-    # collect all distances to find the range for normalization
+    # Collect all distances for normalization
     distances = []
     for other_book in all_books:
-        distance = book.get_emotional_distance(other_book)
-        if distance is not None:
-            distances.append(distance)
+        emotional_distance = book.get_emotional_distance(other_book)
+        if emotional_distance is not None:
+            # Calculate bookshelf overlap (Jaccard similarity)
+            bookshelf_similarity = 0.0
+            if book.bookshelves and other_book.bookshelves:
+                book_shelves_set = set(book.bookshelves)
+                other_shelves_set = set(other_book.bookshelves)
+                intersection = book_shelves_set & other_shelves_set
+                union = book_shelves_set | other_shelves_set
+                if union:
+                    bookshelf_similarity = len(intersection) / len(union)
+
+            # Combined distance: 70% emotional, 30% bookshelf
+            # Lower bookshelf similarity = higher genre distance
+            genre_distance = 1.0 - bookshelf_similarity
+            combined_distance = (0.7 * emotional_distance) + (0.3 * genre_distance * 10)  # Scale genre to similar range
+
+            distances.append(combined_distance)
             recommendations.append({
                 'book': other_book,
-                'distance': distance,
+                'distance': combined_distance,
+                'emotional_distance': emotional_distance,
+                'bookshelf_similarity': bookshelf_similarity * 100,  # As percentage
             })
 
-    # normalize similarity based on actual distance range in the dataset
-    # uses exponential decay: similarity = 100 * e^(-distance/scale)
-    # scale factor ensures median distance maps to ~50% similarity
+    # Normalize similarity using exponential decay
     if distances:
         median_distance = sorted(distances)[len(distances) // 2]
-        scale_factor = median_distance / 0.693  # ln(2) ≈ 0.693, so median → 50%
+        scale_factor = median_distance / 0.693  # ln(2) ≈ 0.693
 
         for rec in recommendations:
-            # exponential similarity: closer books have exponentially higher similarity
-            # distance=0 → 100%, distance=median → 50%, distance=∞ → 0%
             rec['similarity'] = 100 * (2.718 ** (-rec['distance'] / scale_factor))
 
-    # sort by distance (closest first) and take top 10
+    # Sort by combined distance and take top 10
     recommendations.sort(key=lambda x: x['distance'])
     recommendations = recommendations[:10]
 
