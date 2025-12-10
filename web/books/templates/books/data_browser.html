@@ -43,13 +43,19 @@
             <label class="text-sm font-medium text-gray-700">Sort by:</label>
             <select name="sort" onchange="this.form.submit()"
                     class="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500">
-                <option value="title" {% if sort_by == 'title' %}selected{% endif %}>Title</option>
-                <option value="author" {% if sort_by == 'author' %}selected{% endif %}>Author</option>
+                <option value="title" {% if sort_by == 'title' %}selected{% endif %}>Title (A-Z)</option>
+                <option value="author" {% if sort_by == 'author' %}selected{% endif %}>Author (A-Z)</option>
                 <option value="book_id" {% if sort_by == 'book_id' %}selected{% endif %}>Book ID</option>
-                <option value="-avg_joy" {% if sort_by == '-avg_joy' %}selected{% endif %}>Joy (High to Low)</option>
-                <option value="-avg_sadness" {% if sort_by == '-avg_sadness' %}selected{% endif %}>Sadness (High to Low)</option>
-                <option value="-avg_fear" {% if sort_by == '-avg_fear' %}selected{% endif %}>Fear (High to Low)</option>
-                <option value="-avg_valence" {% if sort_by == '-avg_valence' %}selected{% endif %}>Valence (High to Low)</option>
+                <optgroup label="Sort by Emotion (High to Low)">
+                    <option value="-avg_joy" {% if sort_by == '-avg_joy' %}selected{% endif %}>Joy</option>
+                    <option value="-avg_sadness" {% if sort_by == '-avg_sadness' %}selected{% endif %}>Sadness</option>
+                    <option value="-avg_fear" {% if sort_by == '-avg_fear' %}selected{% endif %}>Fear</option>
+                    <option value="-avg_anger" {% if sort_by == '-avg_anger' %}selected{% endif %}>Anger</option>
+                    <option value="-avg_anticipation" {% if sort_by == '-avg_anticipation' %}selected{% endif %}>Anticipation</option>
+                    <option value="-avg_disgust" {% if sort_by == '-avg_disgust' %}selected{% endif %}>Disgust</option>
+                    <option value="-avg_surprise" {% if sort_by == '-avg_surprise' %}selected{% endif %}>Surprise</option>
+                    <option value="-avg_trust" {% if sort_by == '-avg_trust' %}selected{% endif %}>Trust</option>
+                </optgroup>
                 <option value="-created_at" {% if sort_by == '-created_at' %}selected{% endif %}>Recently Added</option>
             </select>
         </form>
@@ -65,13 +71,14 @@
                         <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Title</th>
                         <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Author</th>
                         <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Genre</th>
-                        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Joy</th>
-                        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Sadness</th>
-                        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Fear</th>
-                        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Anger</th>
-                        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Valence</th>
-                        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Arousal</th>
-                        <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Dominance</th>
+                        <th class="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase">Joy</th>
+                        <th class="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase">Sadness</th>
+                        <th class="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase">Fear</th>
+                        <th class="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase">Anger</th>
+                        <th class="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase">Anticipation</th>
+                        <th class="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase">Disgust</th>
+                        <th class="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase">Surprise</th>
+                        <th class="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase">Trust</th>
                         <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Actions</th>
                     </tr>
                 </thead>
@@ -90,13 +97,14 @@
                             <span class="text-gray-400">-</span>
                             {% endif %}
                         </td>
-                        <td class="px-4 py-3 text-sm text-right text-green-600">{{ book.avg_joy|floatformat:3 }}</td>
-                        <td class="px-4 py-3 text-sm text-right text-blue-600">{{ book.avg_sadness|floatformat:3 }}</td>
-                        <td class="px-4 py-3 text-sm text-right text-red-600">{{ book.avg_fear|floatformat:3 }}</td>
-                        <td class="px-4 py-3 text-sm text-right text-orange-600">{{ book.avg_anger|floatformat:3 }}</td>
-                        <td class="px-4 py-3 text-sm text-right font-semibold">{{ book.avg_valence|floatformat:3 }}</td>
-                        <td class="px-4 py-3 text-sm text-right font-semibold">{{ book.avg_arousal|floatformat:3 }}</td>
-                        <td class="px-4 py-3 text-sm text-right font-semibold">{{ book.avg_dominance|floatformat:3 }}</td>
+                        <td class="px-3 py-3 text-sm text-right text-green-600">{{ book.avg_joy|floatformat:3 }}</td>
+                        <td class="px-3 py-3 text-sm text-right text-blue-600">{{ book.avg_sadness|floatformat:3 }}</td>
+                        <td class="px-3 py-3 text-sm text-right text-red-600">{{ book.avg_fear|floatformat:3 }}</td>
+                        <td class="px-3 py-3 text-sm text-right text-orange-600">{{ book.avg_anger|floatformat:3 }}</td>
+                        <td class="px-3 py-3 text-sm text-right text-purple-600">{{ book.avg_anticipation|floatformat:3 }}</td>
+                        <td class="px-3 py-3 text-sm text-right text-pink-600">{{ book.avg_disgust|floatformat:3 }}</td>
+                        <td class="px-3 py-3 text-sm text-right text-yellow-600">{{ book.avg_surprise|floatformat:3 }}</td>
+                        <td class="px-3 py-3 text-sm text-right text-indigo-600">{{ book.avg_trust|floatformat:3 }}</td>
                         <td class="px-4 py-3 text-sm text-center">
                             <a href="{% url 'books:book_detail' book.book_id %}"
                                class="text-purple-600 hover:text-purple-800 font-medium">
@@ -106,7 +114,7 @@
                     </tr>
                     {% empty %}
                     <tr>
-                        <td colspan="12" class="px-4 py-8 text-center text-gray-500">
+                        <td colspan="13" class="px-4 py-8 text-center text-gray-500">
                             No books in database. Run <code class="bg-gray-100 px-2 py-1 rounded">python manage.py load_books ../output/trajectories</code> to load data.
                         </td>
                     </tr>
